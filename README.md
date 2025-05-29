@@ -6,7 +6,7 @@ A [FastMCP](https://github.com/jlowin/fastmcp) server that provides AI assistant
 
 Using Claude with this MCP server to search for stores, find products, and add items to your cart:
 
-![Kroger MCP Demo](https://github.com/user-attachments/assets/your-demo-image-here)
+https://github.com/user-attachments/assets/69055f5f-04f5-4ec1-96ac-330aa288fbd1
 
 ## Changelog
 A changelog with recent changes is [here](CHANGELOG.md).
