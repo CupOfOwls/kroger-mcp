@@ -1,5 +1,7 @@
 <p align="center">
-   ![Logo](media/harper-logo.png)
+   <picture>
+      <source srcset="media/harper-logo.png">
+   </picture>
 </p>
 
 # 🛒 Kroger MCP Server 🛍️ -- FastMCP for Kroger Shopping
