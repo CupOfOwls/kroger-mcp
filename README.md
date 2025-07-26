@@ -19,8 +19,10 @@ A changelog with recent changes is [here](CHANGELOG.md).
 You will need Kroger API credentials (free from [Kroger Developer Portal](https://developer.kroger.com/)).
 Visit the [Kroger Developer Portal](https://developer.kroger.com/manage/apps/register) to:
 1. Create a developer account
-2. Register your application
+2. [Register](https://developer.kroger.com/manage/apps/register) your application
 3. Get your `CLIENT_ID`, `CLIENT_SECRET`, and set your `REDIRECT_URI`
+
+   Example `REDIRECT_URI`: http://localhost:8000/callback
 
 The first time you run a tool requiring user authentication, you'll be prompted to authorize your app through your web browser. You're granting permission to **your own registered app**, not to any third party.
 
@@ -48,7 +50,7 @@ Edit Claude Desktop's configuration file:
       "env": {
         "KROGER_CLIENT_ID": "your_client_id",
         "KROGER_CLIENT_SECRET": "your_client_secret", 
-        "KROGER_REDIRECT_URI": "http://localhost:8000/callback",
+        "KROGER_REDIRECT_URI": "your_redirect_uri",
         "KROGER_USER_ZIP_CODE": "10001"
       }
     }
@@ -84,7 +86,7 @@ Then, edit Claude Desktop's configuration file:
       "env": {
         "KROGER_CLIENT_ID": "your_client_id",
         "KROGER_CLIENT_SECRET": "your_client_secret", 
-        "KROGER_REDIRECT_URI": "http://localhost:8000/callback",
+        "KROGER_REDIRECT_URI": "your_redirect_uri",
         "KROGER_USER_ZIP_CODE": "10001"
       }
     }
@@ -124,7 +126,7 @@ Create a `.env` file in your project root or pass in env values via the JSON con
 # Required: Your Kroger API credentials
 KROGER_CLIENT_ID=your_client_id_here
 KROGER_CLIENT_SECRET=your_client_secret_here
-KROGER_REDIRECT_URI=http://localhost:8000/callback
+KROGER_REDIRECT_URI=your_redirect_uri
 
 # Optional: Default zip code for location searches
 KROGER_USER_ZIP_CODE=90274
