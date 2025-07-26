@@ -1,8 +1,10 @@
 ![Logo](media/harper-logo.png)
 
-# 🛒 Kroger MCP Server 🛍️ -- FastMCP for Kroger Shopping
+## About
 
-A [FastMCP](https://github.com/jlowin/fastmcp) server that provides AI assistants like Claude with seamless access to Kroger's grocery shopping functionality through the Model Context Protocol ([MCP](https://docs.anthropic.com/en/docs/agents-and-tools/mcp)). This server enables AI assistants to find stores, search products, manage shopping carts, and access Kroger's comprehensive grocery data via the [kroger-api](https://github.com/CupOfOwls/kroger-api) python library.
+A [FastMCP](https://github.com/jlowin/fastmcp) server that provides AI assistants like Claude with seamless access to Kroger's grocery shopping functionality through the Model Context Protocol ([MCP](https://docs.anthropic.com/en/docs/agents-and-tools/mcp)). This server enables AI assistants to find stores, search products, manage shopping carts, and access Kroger's comprehensive grocery data via the [kroger-api](https://github.com/CupOfOwls/kroger-api) python library. 
+
+This is a contributor-friendly repo with the goal of building a community where user's can easily build upon each other's contributions. If you'd like direct access to our community in real-time, feel free to join the [Discord](https://discord.gg/4AQJvmXtgh)!
 
 ## 📺 Demo
 
