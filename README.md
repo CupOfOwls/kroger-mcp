@@ -1,4 +1,5 @@
-![Logo](media/harper-logo.png)
+![Logo](media/harper-logo.jpg)
+Photo by <a href="https://unsplash.com/@jontyson?utm_content=creditCopyText&utm_medium=referral&utm_source=unsplash">Jon Tyson</a> on <a href="https://unsplash.com/photos/red-and-blue-love-neon-light-signage-PEN8PUpXWhw?utm_content=creditCopyText&utm_medium=referral&utm_source=unsplash">Unsplash</a>
 
 ## About
 
