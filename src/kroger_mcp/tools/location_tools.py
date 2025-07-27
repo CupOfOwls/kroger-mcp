@@ -41,6 +41,9 @@ def register_tools(mcp):
             await ctx.info(f"Searching for Kroger locations near {zip_code or 'default zip code'}")
         
         if not zip_code:
+            # If Claude isn't provided with a zip code, he will sometimes generate one.
+            # Which is why get_user_zip_code() is provided as a tool, to ensure Claude uses the
+            # default zip code provided in the env.
             zip_code = get_default_zip_code()
         
         client = get_client_credentials_client()
@@ -116,6 +119,23 @@ def register_tools(mcp):
                 "error": str(e),
                 "data": []
             }
+
+    @mcp.tool()
+    async def get_user_zip_code() -> Dict[str, Any]:
+        """
+        Returns user zip code, it is anticipated that by exposing this to the LLM it will choose to use it
+        rather than generating a zip code based on system data.
+
+        Args: 
+            N/A
+        Returns:
+            Dictionary containing user Zip Code
+        """
+        zip_code = get_default_zip_code()
+        # And thats literally it!
+        user_zip_dict = {"user_zip_code": zip_code}
+        return user_zip_dict
+
 
     @mcp.tool()
     async def get_location_details(
