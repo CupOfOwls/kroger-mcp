@@ -2,6 +2,10 @@
 
 A [FastMCP](https://github.com/jlowin/fastmcp) server that provides AI assistants like Claude with seamless access to Kroger's grocery shopping functionality through the Model Context Protocol ([MCP](https://docs.anthropic.com/en/docs/agents-and-tools/mcp)). This server enables AI assistants to find stores, search products, manage shopping carts, and access Kroger's comprehensive grocery data via the [kroger-api](https://github.com/CupOfOwls/kroger-api) python library.
 
+<a href="https://glama.ai/mcp/servers/@CupOfOwls/kroger-mcp">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@CupOfOwls/kroger-mcp/badge" alt="Kroger Server MCP server" />
+</a>
+
 ## 📺 Demo
 
 Using Claude with this MCP server to search for stores, find products, and add items to your cart:
@@ -143,7 +147,6 @@ python server.py
 # With FastMCP CLI for development
 fastmcp dev server.py --with-editable .
 ```
-
 
 ## 🛠️ Features
 
