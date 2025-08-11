@@ -1,5 +1,7 @@
 # 🛒 Kroger MCP Server 🛍️ -- FastMCP for Kroger Shopping
 
+![Logo](media/harper_logo.jpeg)
+
 A [FastMCP](https://github.com/jlowin/fastmcp) server that provides AI assistants like Claude with seamless access to Kroger's grocery shopping functionality through the Model Context Protocol ([MCP](https://docs.anthropic.com/en/docs/agents-and-tools/mcp)). This server enables AI assistants to find stores, search products, manage shopping carts, and access Kroger's comprehensive grocery data via the [kroger-api](https://github.com/CupOfOwls/kroger-api) python library.
 
 ## 📺 Demo
@@ -23,6 +25,7 @@ Visit the [Kroger Developer Portal](https://developer.kroger.com/manage/apps/reg
 The first time you run a tool requiring user authentication, you'll be prompted to authorize your app through your web browser. You're granting permission to **your own registered app**, not to any third party.
 
 ### Installation
+##### ⚠️ macOS users must use installation Option 2 ⚠️
 
 #### Option 1: Using uvx with Claude Desktop (Recommended)
 Once published to PyPI, you can use uvx to run the package directly without cloning the repository:
@@ -30,6 +33,7 @@ Once published to PyPI, you can use uvx to run the package directly without clon
 Edit Claude Desktop's configuration file:
 
 **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+
 
 **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
@@ -268,6 +272,10 @@ Since the Kroger API doesn't provide cart viewing functionality, this server mai
    User: "I placed the order on the Kroger website"
    Assistant: [Uses mark_order_placed tool, moving current cart to the order history]
    ```
+
+## 🍪 OAuth2 Authentication
+
+When Claude attempts to modify your Kroger account, you will be asked to insert a link into your browser that will handle authentication and allow Claude to add/remove items from your cart. Ensure that you have already made a Kroger account (this is different than your Kroger development account) before attempting to paste this link into your browser to initiate authentication.
 
 ## 🤝 Contributing
 
