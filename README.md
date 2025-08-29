@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/cupofowls-kroger-mcp-badge.png)](https://mseep.ai/app/cupofowls-kroger-mcp)
+
 # 🛒 Kroger MCP Server 🛍️ -- FastMCP for Kroger Shopping
 
 ![Logo](media/harper_logo.jpeg)
