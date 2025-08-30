@@ -1,70 +1,55 @@
+#!/usr/bin/env python3
 """
-Shared utilities and client management for Kroger MCP server
+Shared utilities and configuration for Kroger MCP tools
 """
 
 import os
 import json
 from typing import Optional, Dict, Any
-from dotenv import load_dotenv
+from kroger_api import KrogerAPI
+from kroger_api.auth import load_token
 
-from kroger_api.kroger_api import KrogerAPI
-from kroger_api.utils.env import load_and_validate_env, get_zip_code
-from kroger_api.token_storage import load_token
+# Global variables for client instances
+_client_credentials_client = None
+_authenticated_client = None
 
-# Load environment variables
-load_dotenv()
+# File paths
+PREFERENCES_FILE = os.path.expanduser("~/.kroger_mcp_preferences.json")
+TOKEN_FILE = ".kroger_token_user.json"
 
-# Global state for clients and preferred location
-_authenticated_client: Optional[KrogerAPI] = None
-_client_credentials_client: Optional[KrogerAPI] = None
+def load_and_validate_env(required_vars: list) -> None:
+    """Load and validate required environment variables"""
+    missing_vars = []
+    for var in required_vars:
+        if not os.getenv(var):
+            missing_vars.append(var)
+    
+    if missing_vars:
+        raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
-# JSON files for configuration storage
-PREFERENCES_FILE = "kroger_preferences.json"
+def get_zip_code(default: str = "10001") -> str:
+    """Get zip code from environment or use default"""
+    return os.getenv("KROGER_USER_ZIP_CODE", default)
 
-
-def get_client_credentials_client() -> KrogerAPI:
-    """Get or create a client credentials authenticated client for public data"""
+def get_client_credentials_client():
+    """Get a client credentials authenticated client (for public data)"""
     global _client_credentials_client
     
-    if _client_credentials_client is not None and _client_credentials_client.test_current_token():
+    if _client_credentials_client is not None:
         return _client_credentials_client
-    
-    _client_credentials_client = None
     
     try:
         load_and_validate_env(["KROGER_CLIENT_ID", "KROGER_CLIENT_SECRET"])
         _client_credentials_client = KrogerAPI()
-        
-        # Try to load existing token first
-        token_file = ".kroger_token_client_product.compact.json"
-        token_info = load_token(token_file)
-        
-        if token_info:
-            # Test if the token is still valid
-            _client_credentials_client.client.token_info = token_info
-            if _client_credentials_client.test_current_token():
-                # Token is valid, use it
-                return _client_credentials_client
-        
-        # Token is invalid or not found, get a new one
-        token_info = _client_credentials_client.authorization.get_token_with_client_credentials("product.compact")
+        _client_credentials_client.authorization.client_credentials()
         return _client_credentials_client
     except Exception as e:
-        raise Exception(f"Failed to get client credentials: {str(e)}")
+        raise Exception(f"Failed to initialize client credentials client: {str(e)}")
 
-
-def get_authenticated_client() -> KrogerAPI:
-    """Get or create a user-authenticated client for cart operations
-    
-    This function attempts to load an existing token or prompts for authentication.
-    In an MCP context, the user needs to explicitly call start_authentication and
-    complete_authentication tools to authenticate.
-    
-    Returns:
-        KrogerAPI: Authenticated client
-        
-    Raises:
-        Exception: If no valid token is available and authentication is required
+def get_authenticated_client():
+    """
+    Get an authenticated client for user-specific operations.
+    Raises an exception if authentication is required.
     """
     global _authenticated_client
     
@@ -116,58 +101,104 @@ def get_authenticated_client() -> KrogerAPI:
             # Other unexpected errors
             raise Exception(f"Authentication failed: {str(e)}")
 
-
 def invalidate_authenticated_client():
     """Invalidate the authenticated client to force re-authentication"""
     global _authenticated_client
     _authenticated_client = None
-
 
 def invalidate_client_credentials_client():
     """Invalidate the client credentials client to force re-authentication"""
     global _client_credentials_client
     _client_credentials_client = None
 
-
 def _load_preferences() -> dict:
-    """Load preferences from file"""
+    """Load preferences from file with better error handling and file creation"""
     try:
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(PREFERENCES_FILE), exist_ok=True)
+        
         if os.path.exists(PREFERENCES_FILE):
-            with open(PREFERENCES_FILE, 'r') as f:
-                return json.load(f)
+            with open(PREFERENCES_FILE, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if content:
+                    return json.loads(content)
+                else:
+                    # File exists but is empty
+                    return {"preferred_location_id": None}
+        else:
+            # File doesn't exist, create it with default preferences
+            default_prefs = {"preferred_location_id": None}
+            _save_preferences(default_prefs)
+            return default_prefs
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"Warning: Could not load preferences from {PREFERENCES_FILE}: {e}")
+        # Return default preferences and try to recreate the file
+        default_prefs = {"preferred_location_id": None}
+        try:
+            _save_preferences(default_prefs)
+        except Exception as save_error:
+            print(f"Warning: Could not create default preferences file: {save_error}")
+        return default_prefs
     except Exception as e:
-        print(f"Warning: Could not load preferences: {e}")
-    return {"preferred_location_id": None}
-
+        print(f"Warning: Unexpected error loading preferences: {e}")
+        return {"preferred_location_id": None}
 
 def _save_preferences(preferences: dict) -> None:
-    """Save preferences to file"""
+    """Save preferences to file with better error handling"""
     try:
-        with open(PREFERENCES_FILE, 'w') as f:
-            json.dump(preferences, f, indent=2)
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(PREFERENCES_FILE), exist_ok=True)
+        
+        # Write to a temporary file first, then rename for atomic operation
+        temp_file = PREFERENCES_FILE + ".tmp"
+        with open(temp_file, 'w', encoding='utf-8') as f:
+            json.dump(preferences, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())  # Force write to disk
+        
+        # Atomic rename
+        if os.name == 'nt':  # Windows
+            if os.path.exists(PREFERENCES_FILE):
+                os.remove(PREFERENCES_FILE)
+        os.rename(temp_file, PREFERENCES_FILE)
+        
+        print(f"Preferences saved successfully to {PREFERENCES_FILE}")
     except Exception as e:
-        print(f"Warning: Could not save preferences: {e}")
-
+        print(f"Error: Could not save preferences to {PREFERENCES_FILE}: {e}")
+        # Clean up temp file if it exists
+        if os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except:
+                pass
+        raise
 
 def get_preferred_location_id() -> Optional[str]:
     """Get the current preferred location ID from preferences file"""
     preferences = _load_preferences()
-    return preferences.get("preferred_location_id")
-
+    location_id = preferences.get("preferred_location_id")
+    print(f"Retrieved preferred location ID: {location_id}")
+    return location_id
 
 def set_preferred_location_id(location_id: str) -> None:
     """Set the preferred location ID in preferences file"""
+    print(f"Setting preferred location ID to: {location_id}")
     preferences = _load_preferences()
     preferences["preferred_location_id"] = location_id
     _save_preferences(preferences)
-
+    
+    # Verify the save was successful
+    saved_preferences = _load_preferences()
+    saved_location_id = saved_preferences.get("preferred_location_id")
+    if saved_location_id != location_id:
+        raise Exception(f"Failed to save preferred location. Expected: {location_id}, Got: {saved_location_id}")
+    print(f"Successfully saved preferred location ID: {location_id}")
 
 def format_currency(value: Optional[float]) -> str:
     """Format a value as currency"""
     if value is None:
         return "N/A"
     return f"${value:.2f}"
-
 
 def get_default_zip_code() -> str:
     """Get the default zip code from environment or fallback"""
