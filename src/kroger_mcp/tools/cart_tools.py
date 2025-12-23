@@ -56,17 +56,17 @@ def _save_order_history(history: List[Dict[str, Any]]) -> None:
 
 
 def _add_item_to_local_cart(product_id: str, quantity: int, modality: str, product_details: Dict[str, Any] = None) -> None:
-    """Add an item to the local cart tracking"""
+    """Add an item to the local cart tracking and analytics database"""
     cart_data = _load_cart_data()
     current_cart = cart_data.get("current_cart", [])
-    
+
     # Check if item already exists in cart
     existing_item = None
     for item in current_cart:
         if item.get("product_id") == product_id and item.get("modality") == modality:
             existing_item = item
             break
-    
+
     if existing_item:
         # Update existing item quantity
         existing_item["quantity"] = existing_item.get("quantity", 0) + quantity
@@ -80,16 +80,24 @@ def _add_item_to_local_cart(product_id: str, quantity: int, modality: str, produ
             "added_at": datetime.now().isoformat(),
             "last_updated": datetime.now().isoformat()
         }
-        
+
         # Add product details if provided
         if product_details:
             new_item.update(product_details)
-        
+
         current_cart.append(new_item)
-    
+
     cart_data["current_cart"] = current_cart
     cart_data["last_updated"] = datetime.now().isoformat()
     _save_cart_data(cart_data)
+
+    # Record in analytics database
+    try:
+        from ..analytics.purchase_tracker import record_cart_add
+        record_cart_add(product_id, quantity, modality, product_details)
+    except Exception as e:
+        # Don't fail cart operations if analytics fails
+        print(f"Warning: Could not record analytics: {e}")
 
 
 def register_tools(mcp):
@@ -170,7 +178,7 @@ def register_tools(mcp):
             elif "400" in error_message or "Bad Request" in error_message:
                 return {
                     "success": False,
-                    "error": f"Invalid request. Please check the product ID and try again.",
+                    "error": "Invalid request. Please check the product ID and try again.",
                     "details": error_message
                 }
             else:
@@ -435,16 +443,32 @@ def register_tools(mcp):
             order_history = _load_order_history()
             order_history.append(order_record)
             _save_order_history(order_history)
-            
+
+            # Record in analytics database and update statistics
+            analytics_order_id = None
+            try:
+                from ..analytics.purchase_tracker import record_order
+                from ..analytics.statistics import update_all_product_stats
+
+                analytics_order_id = record_order(current_cart, order_notes)
+
+                # Update statistics for all products in the order
+                product_ids = [item.get("product_id") for item in current_cart]
+                update_all_product_stats(product_ids)
+            except Exception as e:
+                # Don't fail order operations if analytics fails
+                print(f"Warning: Could not record analytics: {e}")
+
             # Clear current cart
             cart_data["current_cart"] = []
             cart_data["last_updated"] = datetime.now().isoformat()
             _save_cart_data(cart_data)
-            
+
             return {
                 "success": True,
                 "message": f"Marked order with {order_record['item_count']} items as placed",
                 "order_id": len(order_history),  # Simple order ID based on history length
+                "analytics_order_id": analytics_order_id,
                 "items_placed": order_record["item_count"],
                 "total_quantity": order_record["total_quantity"],
                 "placed_at": order_record["placed_at"]

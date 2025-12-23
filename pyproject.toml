@@ -32,6 +32,7 @@ dependencies = [
     "requests",
     "pydantic>=2.0.0",
     "python-dotenv",
+    "uvicorn",
 ]
 
 [project.optional-dependencies]

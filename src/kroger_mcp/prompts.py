@@ -2,7 +2,7 @@
 MCP prompts for the Kroger MCP server
 """
 
-from typing import List, Dict, Any, Optional
+from typing import Optional
 from fastmcp import Context
 
 
@@ -94,4 +94,126 @@ For each store, please show the full address, distance, and any special features
 5. If any ingredients aren't available, suggest alternatives
 
 Before adding items to cart, please ask me if I prefer pickup or delivery for these items.
+"""
+
+    @mcp.prompt()
+    async def smart_shopping_list(
+        days_ahead: int = 7,
+        include_seasonal: bool = True,
+        ctx: Context = None
+    ) -> str:
+        """
+        Generate a smart shopping list based on purchase history and predictions.
+
+        Uses purchase patterns to predict what items you'll need soon and
+        identifies upcoming seasonal/holiday items.
+
+        Args:
+            days_ahead: Number of days to look ahead for predictions
+            include_seasonal: Whether to include upcoming holiday items
+
+        Returns:
+            A prompt for generating an intelligent shopping list
+        """
+        seasonal_text = (
+            "Also check for any upcoming seasonal or holiday items I typically buy."
+            if include_seasonal else ""
+        )
+
+        return f"""Based on my purchase history and consumption patterns, please help me
+create a smart shopping list for the next {days_ahead} days.
+
+Please:
+1. Use get_purchase_predictions to find items I'll likely need to repurchase
+2. Show items by urgency level (critical, high, medium, low)
+3. Include routine items (daily/weekly essentials) that are due
+4. Highlight any items that are overdue for repurchase
+{f"5. {seasonal_text}" if seasonal_text else ""}
+
+For each item, show:
+- Product description
+- Days until needed (or days overdue)
+- Urgency level
+- Confidence in the prediction
+
+After showing the list, ask if I'd like to add any of these items to my cart.
+Focus on items with high confidence predictions and don't suggest things I rarely buy.
+"""
+
+    @mcp.prompt()
+    async def categorize_my_items(ctx: Context = None) -> str:
+        """
+        Generate a prompt to review and categorize tracked items.
+
+        Returns:
+            A prompt for reviewing item categorization
+        """
+        return """Please help me review and categorize my tracked grocery items.
+
+Use get_category_summary to show me how my items are currently categorized:
+- routine: Items I buy almost constantly (every 1-14 days)
+- regular: Items I buy frequently/occasionally (every 15-60 days)
+- treat: Seasonal or holiday-specific items
+
+Then use get_items_by_category to list items in each category.
+
+For any items that seem miscategorized, ask if I'd like to change their category.
+For example, if something I buy weekly is marked as "treat", it should probably be "routine".
+
+After reviewing, let me know if I should manually categorize any items differently.
+"""
+
+    @mcp.prompt()
+    async def purchase_insights(ctx: Context = None) -> str:
+        """
+        Generate a prompt for analyzing purchase patterns and insights.
+
+        Returns:
+            A prompt for purchase pattern analysis
+        """
+        return """Please analyze my grocery purchase patterns and give me insights.
+
+Use get_category_summary and get_purchase_predictions to help me understand:
+
+1. **Purchase Frequency**: How often do I typically shop?
+2. **Category Breakdown**: What percentage of my purchases are routine vs regular vs treats?
+3. **Upcoming Needs**: What items will I likely need in the next 2 weeks?
+4. **Seasonal Patterns**: Are there any items I only buy around certain holidays?
+5. **Overdue Items**: Am I forgetting to repurchase anything important?
+
+Present this as a brief shopping intelligence report with actionable recommendations.
+"""
+
+    @mcp.prompt()
+    async def order_saved_recipe(
+        recipe_name: str = "carbonara",
+        ctx: Context = None
+    ) -> str:
+        """
+        Generate a prompt to order ingredients from a saved recipe with opt-out.
+
+        Args:
+            recipe_name: Name or partial name of the saved recipe
+
+        Returns:
+            A prompt for ordering recipe ingredients with skip options
+        """
+        return f"""I want to make {recipe_name} from my saved recipes.
+
+Please help me order the ingredients:
+
+1. Use search_recipes to find my "{recipe_name}" recipe
+2. Use get_recipe to show me the full ingredient list
+3. Ask me which ingredients I already have at home
+4. Use preview_recipe_order to show what will be ordered (skipping items I have)
+5. Confirm the order details and ask if I want PICKUP or DELIVERY
+6. Use order_recipe_ingredients with skip_items for items I already have
+
+For each ingredient, show:
+- Name and quantity needed
+- Whether it has a linked Kroger product
+- Estimated price if available
+
+If any ingredients aren't linked to products yet, search for them and offer to
+link them using link_ingredient_to_product for future orders.
 """
