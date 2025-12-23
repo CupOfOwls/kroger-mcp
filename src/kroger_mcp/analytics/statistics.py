@@ -118,10 +118,11 @@ def update_product_stats(product_id: str) -> Dict[str, Any]:
 
     conn = get_db_connection()
     try:
-        # Get all order_placed events for this product (sorted by date)
+        # Get all consumption-related events for this product (sorted by date)
+        # Includes both actual orders and pantry depletion feedback
         cursor = conn.execute("""
             SELECT * FROM purchase_events
-            WHERE product_id = ? AND event_type = 'order_placed'
+            WHERE product_id = ? AND event_type IN ('order_placed', 'pantry_depleted')
             ORDER BY event_date ASC
         """, (product_id,))
         events = [dict(row) for row in cursor.fetchall()]

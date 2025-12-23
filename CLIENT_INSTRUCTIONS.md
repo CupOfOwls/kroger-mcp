@@ -255,6 +255,18 @@ The system calculates how fast you use items:
 
 More purchase history = more accurate predictions.
 
+### Learning from Manual Adjustments
+
+**When you mark an item as empty (0%), the system learns from it:**
+- Records a "depletion event" capturing how long the item actually lasted
+- Updates the consumption rate calculation with this real-world data
+- Improves future predictions automatically
+
+Example:
+- System predicted milk lasts 7 days
+- You mark it empty after 5 days
+- System adjusts predictions to account for faster consumption
+
 ---
 
 ## Food Quality Guidelines

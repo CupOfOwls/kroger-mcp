@@ -122,6 +122,9 @@ def update_pantry_level(
     """
     Manually set pantry level for an item.
 
+    When level is set to 0 (empty), records a depletion event that feeds
+    back into consumption rate calculations for more accurate predictions.
+
     Args:
         product_id: The product identifier
         level: Percentage level (0-100)
@@ -132,35 +135,109 @@ def update_pantry_level(
     ensure_initialized()
 
     level = max(0, min(100, level))  # Clamp to 0-100
-    now = datetime.now().isoformat()
+    now = datetime.now()
+    now_str = now.isoformat()
 
     conn = get_db_connection()
     try:
         cursor = conn.execute(
-            "SELECT id FROM pantry_items WHERE product_id = ?",
+            "SELECT id, last_restocked_at, level_percent FROM pantry_items WHERE product_id = ?",
             (product_id,)
         )
-        if not cursor.fetchone():
+        row = cursor.fetchone()
+        if not row:
             return {
                 'success': False,
                 'error': f"Item '{product_id}' not in pantry. Use add_to_pantry first."
             }
 
+        previous_level = row['level_percent']
+        last_restocked = row['last_restocked_at']
+
+        # Record depletion event when item marked as empty (level <= 5%)
+        # This feeds back into consumption rate calculations
+        depletion_recorded = False
+        if level <= 5 and previous_level > 5 and last_restocked:
+            depletion_recorded = _record_depletion_event(
+                product_id, last_restocked, now_str
+            )
+
         conn.execute("""
             UPDATE pantry_items
             SET level_percent = ?, last_updated_at = ?
             WHERE product_id = ?
-        """, (level, now, product_id))
+        """, (level, now_str, product_id))
         conn.commit()
 
-        return {
+        result = {
             'success': True,
             'product_id': product_id,
             'level_percent': level,
-            'updated_at': now
+            'updated_at': now_str
         }
+
+        if depletion_recorded:
+            result['depletion_recorded'] = True
+            result['message'] = 'Consumption data recorded for better predictions'
+
+        return result
     finally:
         conn.close()
+
+
+def _record_depletion_event(
+    product_id: str,
+    last_restocked_at: str,
+    depleted_at: str
+) -> bool:
+    """
+    Record a pantry depletion event for consumption analytics.
+
+    This creates a purchase event record that captures the actual consumption
+    time between restock and depletion, improving prediction accuracy.
+
+    Args:
+        product_id: The product identifier
+        last_restocked_at: When the item was last restocked
+        depleted_at: When the item was marked as depleted
+
+    Returns:
+        True if event was recorded, False otherwise
+    """
+    try:
+        conn = get_db_connection()
+        try:
+            # Record as a special event type that gets included in consumption calc
+            conn.execute("""
+                INSERT INTO purchase_events
+                (product_id, quantity, event_type, event_date, event_timestamp)
+                VALUES (?, 1, 'pantry_depleted', ?, ?)
+            """, (
+                product_id,
+                depleted_at[:10],  # Just the date part
+                depleted_at
+            ))
+            conn.commit()
+
+            # Trigger stats recalculation to incorporate the new data point
+            from .statistics import update_product_stats
+            update_product_stats(product_id)
+
+            # Update depletion rate based on new stats
+            new_rate = calculate_depletion_rate(product_id)
+            conn = get_db_connection()
+            conn.execute("""
+                UPDATE pantry_items
+                SET daily_depletion_rate = ?
+                WHERE product_id = ?
+            """, (new_rate, product_id))
+            conn.commit()
+
+            return True
+        finally:
+            conn.close()
+    except Exception:
+        return False
 
 
 def add_to_pantry(
