@@ -151,25 +151,33 @@ fastmcp dev server.py --with-editable .
 
 ## 🛠️ Features
 
+This MCP server provides **62 tools** across 10 modules:
+- **Core Shopping**: Locations, products, cart management
+- **Smart Analytics**: Purchase predictions, consumption patterns, seasonal awareness
+- **Recipe Management**: Save recipes, selective ordering with skip items
+- **Pantry Tracking**: Inventory levels with auto-depletion estimates
+- **Reporting**: Spending analysis, pattern reports, data export
+
 ### 💬 Built-In MCP Prompts
 - **Shopping Path**: Find optimal path through store for a grocery list
 - **Pharmacy Check**: Check if pharmacy at preferred location is open
 - **Store Selection**: Help user set their preferred Kroger store
 - **Recipe Shopping**: Find recipes and add ingredients to cart
 
-### 📚 Available Tools
+### 📚 Available Tools (62 Total)
 
-#### Location Tools
+#### Location Tools (6)
 
 | Tool | Description | Auth Required |
 |------|-------------|---------------|
 | `search_locations` | Find Kroger stores near a zip code | No |
+| `get_user_zip_code` | Get the default zip code from environment | No |
 | `get_location_details` | Get detailed information about a specific store | No |
 | `set_preferred_location` | Set a preferred store for future operations | No |
 | `get_preferred_location` | Get the currently set preferred store | No |
 | `check_location_exists` | Verify if a location ID is valid | No |
 
-#### Product Tools
+#### Product Tools (4)
 
 | Tool | Description | Auth Required |
 |------|-------------|---------------|
@@ -178,7 +186,7 @@ fastmcp dev server.py --with-editable .
 | `search_products_by_id` | Find products by their specific product ID | No |
 | `get_product_images` | Get product images from specific perspective (front, back, etc.) | No |
 
-#### Cart Tools
+#### Cart Tools (7)
 
 | Tool | Description | Auth Required |
 |------|-------------|---------------|
@@ -190,7 +198,7 @@ fastmcp dev server.py --with-editable .
 | `mark_order_placed` | Move current cart to order history | No |
 | `view_order_history` | View history of placed orders | No |
 
-#### Information Tools
+#### Information Tools (6)
 
 | Tool | Description | Auth Required |
 |------|-------------|---------------|
@@ -201,7 +209,7 @@ fastmcp dev server.py --with-editable .
 | `get_department_details` | Get details about a specific department | No |
 | `check_department_exists` | Check if a department exists | No |
 
-#### Profile Tools
+#### Profile Tools (4)
 
 | Tool | Description | Auth Required |
 |------|-------------|---------------|
@@ -210,11 +218,71 @@ fastmcp dev server.py --with-editable .
 | `get_authentication_info` | Get detailed authentication status | Yes |
 | `force_reauthenticate` | Clear tokens and force re-authentication | No |
 
-#### Utility Tools
+#### Authentication Tools (2)
+
+| Tool | Description | Auth Required |
+|------|-------------|---------------|
+| `start_authentication` | Begin OAuth2 flow, returns authorization URL | No |
+| `complete_authentication` | Complete OAuth2 flow with redirect URL | No |
+
+#### Utility Tools (1)
 
 | Tool | Description | Auth Required |
 |------|-------------|---------------|
 | `get_current_datetime` | Get current system date and time | No |
+
+#### Prediction & Analytics Tools (18)
+
+Smart shopping predictions based on purchase history with EWMA algorithms.
+
+| Tool | Description | Auth Required |
+|------|-------------|---------------|
+| `get_purchase_predictions` | Predict items needed in next N days with urgency scores | No |
+| `get_item_statistics` | Get detailed stats for a product (frequency, consumption rate) | No |
+| `get_purchase_history` | View purchase history for a specific product | No |
+| `get_shopping_suggestions` | Smart list combining predictions + routine + seasonal items | No |
+| `get_seasonal_items` | Get items for upcoming holidays | No |
+| `categorize_item` | Set item category (routine/regular/treat) | No |
+| `get_items_by_category` | List all items in a category | No |
+| `get_category_summary` | Count items by category | No |
+| `get_pantry` | View pantry items with estimated inventory levels | No |
+| `add_to_pantry` | Start tracking an item in pantry | No |
+| `remove_from_pantry` | Stop tracking a pantry item | No |
+| `update_pantry_item` | Manually set inventory level (0-100%) | No |
+| `restock_pantry_item` | Mark item as restocked | No |
+| `get_low_inventory` | Find pantry items running low | No |
+| `configure_predictions` | Tune prediction parameters (EWMA alpha, buffers) | No |
+| `get_prediction_config` | View current prediction settings | No |
+| `reset_prediction_config` | Reset prediction config to defaults | No |
+| `migrate_purchase_data` | Migrate JSON history to SQLite database | No |
+
+#### Recipe Tools (9)
+
+Save recipes and selectively order ingredients (skipping items you already have).
+
+| Tool | Description | Auth Required |
+|------|-------------|---------------|
+| `save_recipe` | Save a recipe with ingredients and instructions | No |
+| `get_recipes` | List all saved recipes | No |
+| `get_recipe` | Get full recipe details including ingredients | No |
+| `search_recipes` | Search recipes by name, tags, or description | No |
+| `update_recipe` | Update an existing recipe | No |
+| `delete_recipe` | Delete a saved recipe | No |
+| `preview_recipe_order` | Preview order with skip_items option | No |
+| `order_recipe_ingredients` | Order recipe ingredients, skipping items you have | Yes |
+| `link_ingredient_to_product` | Link recipe ingredient to Kroger product ID | No |
+
+#### Reporting & Export Tools (5)
+
+Analytics reports and recipe-pantry integration.
+
+| Tool | Description | Auth Required |
+|------|-------------|---------------|
+| `get_analytics_report` | Generate reports (spending, predictions, patterns, pantry) | No |
+| `export_data` | Export all data as JSON for backup | No |
+| `check_recipe_pantry` | Check pantry inventory for recipe ingredients | No |
+| `generate_recipe_shopping_list` | Create optimized list for multiple recipes | No |
+| `get_cookable_recipes` | Find recipes makeable with current pantry | No |
 
 ### 🧰 Local-Only Cart Tracking
 
@@ -245,6 +313,35 @@ Since the Kroger API doesn't provide cart viewing functionality, this server mai
 
 **Note:** Rate limits are enforced per endpoint, not per operation. You can distribute calls across operations using the same endpoint as needed.
 
+### 📊 Analytics System
+
+The analytics system uses SQLite to track purchase patterns and make predictions:
+
+**Database**: `kroger_analytics.db`
+- Stores purchase events with timestamps and quantities
+- Tracks product statistics (frequency, consumption rate, seasonality)
+- Manages pantry inventory levels with auto-depletion
+
+**Prediction Algorithm**: EWMA (Exponentially Weighted Moving Average)
+- Weights recent purchases more heavily than older ones
+- Configurable decay factor (`ewma_alpha`)
+- Safety buffers by category (routine/regular/treat)
+
+**Item Categories**:
+- **Routine**: Items purchased every 1-14 days (milk, bread, eggs)
+- **Regular**: Items purchased every 15-60 days (spices, cleaning supplies)
+- **Treat**: Holiday/seasonal items (turkey, candy)
+
+### 🍳 Recipe Storage
+
+Recipes are stored in `kroger_recipes.json` with:
+- Full ingredient lists with quantities and units
+- Optional Kroger product ID links for direct ordering
+- Tags for easy searching
+- Order history tracking
+
+**Selective Ordering**: When reordering recipes, use `skip_items` to exclude ingredients you already have. Uses fuzzy matching (e.g., `skip_items=["eggs"]` matches "Large Eggs", "Organic Eggs", etc.)
+
 ## 🏫 Basic Workflow
 
 1. **Set up a preferred location**:
@@ -268,10 +365,52 @@ Since the Kroger API doesn't provide cart viewing functionality, this server mai
    ```
    User: "What's in my cart?"
    Assistant: [Uses view_current_cart tool to see local memory]
-   
+
    User: "I placed the order on the Kroger website"
    Assistant: [Uses mark_order_placed tool, moving current cart to the order history]
    ```
+
+## 🔮 Advanced Workflows
+
+### Smart Shopping with Predictions
+```
+User: "What groceries should I buy this week?"
+Assistant: [Uses get_shopping_suggestions with days_ahead=7]
+         → Returns items by urgency: overdue, urgent, due soon
+         → Includes routine items + seasonal suggestions
+```
+
+### Recipe Management
+```
+User: "Save this carbonara recipe"
+Assistant: [Uses save_recipe with ingredients and product_ids]
+
+User: "Order my carbonara recipe, but I have eggs and pasta"
+Assistant: [Uses preview_recipe_order with skip_items=["eggs", "pasta"]]
+         [Uses order_recipe_ingredients to add remaining items to cart]
+```
+
+### Pantry Tracking
+```
+User: "What's running low in my pantry?"
+Assistant: [Uses get_low_inventory with threshold=20]
+         → Shows items below 20% with days until empty
+
+User: "I'm actually out of milk"
+Assistant: [Uses update_pantry_item with level=0]
+         → System learns from this adjustment for better predictions
+```
+
+### Analytics Reports
+```
+User: "Show me my spending patterns"
+Assistant: [Uses get_analytics_report with report_type='spending']
+         → Shows breakdown by category, top products, trends
+
+User: "What recipes can I make with what I have?"
+Assistant: [Uses get_cookable_recipes]
+         → Returns recipes sorted by feasibility with current pantry
+```
 
 ## 🍪 OAuth2 Authentication
 

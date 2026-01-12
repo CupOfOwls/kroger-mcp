@@ -428,6 +428,22 @@ After shopping is complete:
 | `add_to_pantry` | Start tracking an item |
 | `remove_from_pantry` | Stop tracking an item |
 
+### Reporting & Export
+| Tool | Use For |
+|------|---------|
+| `get_analytics_report` | Generate spending/pattern/prediction reports |
+| `export_data` | Export all data as JSON backup |
+| `check_recipe_pantry` | Check if pantry has recipe ingredients |
+| `generate_recipe_shopping_list` | Optimized list for multiple recipes |
+| `get_cookable_recipes` | Find recipes makeable with current pantry |
+
+### Configuration
+| Tool | Use For |
+|------|---------|
+| `configure_predictions` | Tune prediction parameters |
+| `get_prediction_config` | View current settings |
+| `reset_prediction_config` | Reset to defaults |
+
 ---
 
 ## Remember
