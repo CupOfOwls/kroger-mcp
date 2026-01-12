@@ -48,6 +48,93 @@ Before any shopping operation, verify the preferred location is set:
 
 ---
 
+## MCP Prompts (Quick Actions)
+
+The Kroger MCP server provides 8 built-in prompts for common workflows. These are pre-configured templates that guide you through multi-step tasks.
+
+### Shopping & Store Prompts
+
+#### `grocery_list_store_path`
+Find the optimal path through the store for a grocery list.
+```
+Parameters: grocery_list (string) - Items to shop for
+Example: "milk, eggs, bread, chicken breast, broccoli"
+```
+**What it does:** Searches for each product, finds aisle locations, and arranges them in logical shopping order. Does NOT add items to cart.
+
+#### `set_preferred_store`
+Help the user find and set their preferred Kroger location.
+```
+Parameters: zip_code (optional) - Zip code to search near
+Example: "77301"
+```
+**What it does:** Searches nearby stores, shows addresses and features, lets user choose, then sets as preferred location.
+
+#### `pharmacy_open_check`
+Check if the pharmacy at the preferred store is open.
+```
+Parameters: none
+```
+**What it does:** Gets department info for the preferred location, checks pharmacy status, shows hours and available services.
+
+### Recipe & Shopping Intelligence Prompts
+
+#### `add_recipe_to_cart`
+Find a recipe online and add all ingredients to cart.
+```
+Parameters: recipe_type (string) - Type of recipe to search for
+Default: "classic apple pie"
+Example: "chicken tikka masala", "vegetarian lasagna"
+```
+**What it does:** Searches web for recipe, presents it with instructions, looks up each ingredient at Kroger, asks PICKUP/DELIVERY preference, then bulk adds to cart.
+
+#### `order_saved_recipe`
+Order ingredients from a previously saved recipe with skip options.
+```
+Parameters: recipe_name (string) - Name of saved recipe
+Default: "carbonara"
+```
+**What it does:** Finds saved recipe, shows ingredients, asks which items you already have, previews order with skipped items, then orders the rest.
+
+#### `smart_shopping_list`
+Generate an intelligent shopping list based on purchase history.
+```
+Parameters:
+  - days_ahead (int) - Days to look ahead (default: 7)
+  - include_seasonal (bool) - Include holiday items (default: true)
+```
+**What it does:** Uses predictions to find items you'll need soon, shows by urgency level, highlights overdue items, includes seasonal suggestions.
+
+### Analytics & Organization Prompts
+
+#### `categorize_my_items`
+Review and organize tracked grocery items by category.
+```
+Parameters: none
+```
+**What it does:** Shows category breakdown (routine/regular/treat), lists items in each, identifies miscategorized items, offers to fix them.
+
+#### `purchase_insights`
+Get a shopping intelligence report on your patterns.
+```
+Parameters: none
+```
+**What it does:** Analyzes purchase frequency, category breakdown, upcoming needs, seasonal patterns, and overdue items. Provides actionable recommendations.
+
+### Using Prompts
+
+Prompts can be invoked directly in MCP-compatible clients. They generate guided workflows that use multiple tools in sequence. Each prompt is designed to handle a complete task from start to finish.
+
+**Example conversation:**
+```
+User: [invokes smart_shopping_list prompt with days_ahead=14]
+Assistant: Based on your purchase history, here are items you'll need in the next 14 days...
+         [Shows predictions with urgency levels]
+         Would you like me to add any of these to your cart?
+```
+
+---
+
 ## Recipe Creation Workflow
 
 When asked to create a recipe or meal plan:
