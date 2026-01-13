@@ -5,7 +5,7 @@ Provides 9 tools for managing named favorite lists as a shopping list
 workaround (since Kroger Public API doesn't support actual lists).
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from fastmcp import Context
 from pydantic import Field
@@ -145,10 +145,12 @@ def register_tools(mcp):
     @mcp.tool()
     async def add_to_favorite_list(
         product_id: str = Field(
-            description="Kroger product ID to add"
+            default=None,
+            description="Kroger product ID to add (for single item)"
         ),
         description: str = Field(
-            description="Product description"
+            default=None,
+            description="Product description (for single item)"
         ),
         list_id: str = Field(
             default="default",
@@ -156,11 +158,11 @@ def register_tools(mcp):
         ),
         brand: str = Field(
             default=None,
-            description="Product brand"
+            description="Product brand (for single item)"
         ),
         default_quantity: int = Field(
             default=1, ge=1, le=100,
-            description="Default quantity when ordering"
+            description="Default quantity when ordering (for single item)"
         ),
         preferred_modality: str = Field(
             default="PICKUP",
@@ -168,29 +170,62 @@ def register_tools(mcp):
         ),
         notes: str = Field(
             default=None,
-            description="Optional notes about this item"
+            description="Optional notes about this item (for single item)"
+        ),
+        items: Optional[List[Dict[str, Any]]] = Field(
+            default=None,
+            description="""For bulk add: list of items, each with:
+            - product_id (required): Kroger product ID
+            - description (required): Product description
+            - brand (optional): Product brand
+            - default_quantity (optional): Default quantity (default 1)
+            - preferred_modality (optional): PICKUP or DELIVERY
+            - notes (optional): Notes about the item"""
         ),
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
-        Add a product to a favorite list.
+        Add one or more products to a favorite list.
+
+        For single item: provide product_id and description.
+        For bulk add: provide items list with multiple products.
 
         If no list_id is provided, adds to the default "My Favorites" list.
         Each product can only appear once per list.
 
+        Examples:
+        - Single: add_to_favorite_list(product_id="123", description="Milk")
+        - Bulk: add_to_favorite_list(items=[
+            {"product_id": "123", "description": "Milk"},
+            {"product_id": "456", "description": "Bread", "default_quantity": 2}
+          ])
+
         Args:
-            product_id: Kroger product ID
-            description: Product description
+            product_id: Kroger product ID (for single item)
+            description: Product description (for single item)
             list_id: Which list to add to
-            brand: Product brand
-            default_quantity: Quantity to order by default
+            brand: Product brand (for single item)
+            default_quantity: Quantity to order by default (for single item)
             preferred_modality: PICKUP or DELIVERY
-            notes: Optional notes
+            notes: Optional notes (for single item)
+            items: List of items for bulk add
 
         Returns:
-            Success status
+            Success status with added/failed counts for bulk operations
         """
-        from ..analytics.favorites import add_to_list
+        from ..analytics.favorites import add_to_list, bulk_add_to_list
+
+        # Bulk add mode
+        if items is not None:
+            return bulk_add_to_list(list_id=list_id, items=items)
+
+        # Single item mode - validate required fields
+        if not product_id or not description:
+            return {
+                "success": False,
+                "error": "For single item add, both product_id and description "
+                         "are required. For bulk add, provide items list."
+            }
 
         return add_to_list(
             list_id=list_id,
@@ -397,9 +432,10 @@ def register_tools(mcp):
         except Exception as e:
             error_msg = str(e)
             if "401" in error_msg or "Unauthorized" in error_msg:
+                auth_err = "Authentication failed. Run force_reauthenticate."
                 return {
                     "success": False,
-                    "error": "Authentication failed. Please run force_reauthenticate and try again.",
+                    "error": auth_err,
                     "details": error_msg
                 }
             return {

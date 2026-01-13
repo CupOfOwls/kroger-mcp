@@ -337,6 +337,103 @@ def add_to_list(
         return {"success": False, "error": str(e)}
 
 
+def bulk_add_to_list(
+    list_id: str,
+    items: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    Add multiple products to a favorite list in one operation.
+
+    Args:
+        list_id: The list ID
+        items: List of items, each with:
+            - product_id (required): Kroger product ID
+            - description (required): Product description
+            - brand (optional): Product brand
+            - default_quantity (optional): Default quantity (default 1)
+            - preferred_modality (optional): PICKUP or DELIVERY (default PICKUP)
+            - notes (optional): Notes
+
+    Returns:
+        Success status with counts of added/failed items
+    """
+    ensure_initialized()
+
+    # Verify list exists
+    lst = get_list(list_id)
+    if not lst:
+        return {
+            "success": False,
+            "error": f"List '{list_id}' not found"
+        }
+
+    added = []
+    failed = []
+
+    with get_db_cursor() as cursor:
+        for item in items:
+            product_id = item.get("product_id")
+            description = item.get("description")
+
+            if not product_id or not description:
+                failed.append({
+                    "product_id": product_id,
+                    "error": "Missing required field: product_id or description"
+                })
+                continue
+
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO favorite_list_items
+                    (list_id, product_id, description, brand, default_quantity,
+                     preferred_modality, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        list_id,
+                        product_id,
+                        description,
+                        item.get("brand"),
+                        item.get("default_quantity", 1),
+                        item.get("preferred_modality", "PICKUP"),
+                        item.get("notes")
+                    )
+                )
+                added.append({
+                    "product_id": product_id,
+                    "description": description
+                })
+            except Exception as e:
+                if "UNIQUE constraint" in str(e):
+                    failed.append({
+                        "product_id": product_id,
+                        "error": "Already in list"
+                    })
+                else:
+                    failed.append({
+                        "product_id": product_id,
+                        "error": str(e)
+                    })
+
+        # Update list's updated_at if any items were added
+        if added:
+            cursor.execute(
+                "UPDATE favorite_lists SET updated_at = ? WHERE id = ?",
+                (datetime.now().isoformat(), list_id)
+            )
+
+    return {
+        "success": len(added) > 0,
+        "list_id": list_id,
+        "list_name": lst["name"],
+        "added": added,
+        "failed": failed,
+        "added_count": len(added),
+        "failed_count": len(failed)
+    }
+
+
 def remove_from_list(list_id: str, product_id: str) -> Dict[str, Any]:
     """
     Remove a product from a favorite list.
