@@ -5,6 +5,41 @@ All notable changes to the `kroger-mcp` package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-01-12
+
+### Added
+
+- **Favorite Lists System**: Named shopping lists as a workaround since Kroger Public API doesn't support lists
+  - Create multiple named lists (e.g., "Weekly Staples", "Party Supplies", "Monthly Bulk")
+  - Default "My Favorites" list auto-created
+  - Products can be in multiple lists
+  - Each item tracks default quantity and preferred modality
+
+- **Smart List Ordering**: Order list items with pantry awareness
+  - Skip well-stocked items based on pantry levels
+  - Configurable pantry threshold (default 30%)
+  - Track times_ordered for each item
+  - Override modality for entire list
+
+- **Purchase-Based Suggestions**: AI suggestions for favorite lists
+  - Suggest products based on purchase frequency
+  - Filter by minimum purchases and frequency score
+  - Exclude items already in specific lists
+
+### Technical
+
+- 2 new SQLite tables (`favorite_lists`, `favorite_list_items`)
+- 9 new MCP tools for list management
+- Pantry integration for smart ordering
+- Total tools: 71 (was 62)
+
+### New Tools (9)
+
+**Favorite Lists (9)**:
+`create_favorite_list`, `get_favorite_lists`, `rename_favorite_list`,
+`delete_favorite_list`, `add_to_favorite_list`, `remove_from_favorite_list`,
+`get_favorite_list_items`, `order_favorite_list`, `suggest_favorites`
+
 ## [0.3.0] - 2025-01-12
 
 ### Added

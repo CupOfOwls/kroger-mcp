@@ -59,6 +59,26 @@ from .pantry import (
     apply_daily_depletion,
     calculate_depletion_rate,
 )
+from .config import (
+    load_config,
+    save_config,
+    update_config,
+    reset_config,
+    get_config_summary,
+    PredictionConfig,
+)
+from .recipe_integration import (
+    check_recipe_pantry,
+    generate_shopping_list,
+    get_recipes_for_pantry,
+)
+from .reporting import (
+    generate_spending_report,
+    generate_prediction_accuracy_report,
+    generate_patterns_report,
+    generate_pantry_report,
+    export_all_data,
+)
 
 __all__ = [
     # Database
@@ -103,4 +123,21 @@ __all__ = [
     'get_pantry_item',
     'apply_daily_depletion',
     'calculate_depletion_rate',
+    # Config
+    'load_config',
+    'save_config',
+    'update_config',
+    'reset_config',
+    'get_config_summary',
+    'PredictionConfig',
+    # Recipe Integration
+    'check_recipe_pantry',
+    'generate_shopping_list',
+    'get_recipes_for_pantry',
+    # Reporting
+    'generate_spending_report',
+    'generate_prediction_accuracy_report',
+    'generate_patterns_report',
+    'generate_pantry_report',
+    'export_all_data',
 ]

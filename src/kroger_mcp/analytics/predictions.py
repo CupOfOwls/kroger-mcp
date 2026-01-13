@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional
 
 from .database import get_db_connection, ensure_initialized
 from .statistics import get_product_statistics
+from .config import load_config
+from .trend_analysis import predict_with_trend_adjustment
 
 
 @dataclass
@@ -27,24 +29,32 @@ class RepurchasePrediction:
     avg_days_between: Optional[float]
 
 
-def get_urgency_label(urgency: float) -> str:
+def get_urgency_label(urgency: float, is_overdue: bool = False) -> str:
     """
     Convert numeric urgency to human-readable label.
 
     Args:
         urgency: Urgency score 0-1
+        is_overdue: Whether the item is past its predicted date
 
     Returns:
-        Label: 'low', 'medium', 'high', or 'critical'
+        Label: 'none', 'low', 'medium', 'high', 'critical', or 'overdue'
     """
-    if urgency >= 0.9:
+    if is_overdue:
+        return 'overdue'
+
+    config = load_config()
+
+    if urgency >= config.urgency_critical:
         return 'critical'
-    elif urgency >= 0.7:
+    elif urgency >= config.urgency_high:
         return 'high'
-    elif urgency >= 0.4:
+    elif urgency >= config.urgency_medium:
         return 'medium'
-    else:
+    elif urgency > 0:
         return 'low'
+    else:
+        return 'none'
 
 
 def predict_repurchase_date(
@@ -122,20 +132,24 @@ def predict_repurchase_date(
             avg_days_between=avg_days
         )
 
+    # Load config for buffer multipliers
+    config = load_config()
+
     # Base prediction: last purchase + average interval
-    base_prediction = last_date + timedelta(days=avg_days)
+    base_days = avg_days
 
-    # Subtract safety buffer based on std dev
-    # Routine items: 1 std dev buffer (don't run out!)
-    # Regular items: 0.5 std dev buffer
-    # Treats: no buffer (less critical)
-    if category == 'routine':
-        buffer_multiplier = 1.0
-    elif category == 'regular':
-        buffer_multiplier = 0.5
-    else:
-        buffer_multiplier = 0.0
+    # Apply trend adjustment if trend data available
+    trend_direction = stats.get('trend_direction', 'stable')
+    trend_strength = stats.get('trend_strength', 0.0)
+    if trend_direction != 'stable' and trend_strength > 0:
+        base_days = predict_with_trend_adjustment(
+            base_days, trend_direction, trend_strength
+        )
 
+    base_prediction = last_date + timedelta(days=base_days)
+
+    # Subtract safety buffer based on std dev (using config)
+    buffer_multiplier = config.get_buffer_for_category(category)
     buffer_days = std_dev * buffer_multiplier
     predicted_date = base_prediction - timedelta(days=buffer_days)
 
@@ -172,6 +186,9 @@ def predict_repurchase_date(
 
     confidence = data_confidence * consistency
 
+    # Determine if overdue
+    is_overdue = days_until < 0
+
     return RepurchasePrediction(
         product_id=product_id,
         description=description,
@@ -179,7 +196,7 @@ def predict_repurchase_date(
         predicted_date=predicted_date,
         days_until=days_until,
         urgency=round(urgency, 2),
-        urgency_label=get_urgency_label(urgency),
+        urgency_label=get_urgency_label(urgency, is_overdue),
         confidence=round(confidence, 2),
         last_purchase_date=last_date_str,
         avg_days_between=round(avg_days, 1)

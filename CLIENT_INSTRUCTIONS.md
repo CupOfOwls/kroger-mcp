@@ -356,6 +356,71 @@ Example:
 
 ---
 
+## Favorite Lists (Shopping Lists Workaround)
+
+Since Kroger's Public API doesn't support shopping lists, this system provides **named favorite lists** as a workaround. Create multiple lists for different purposes.
+
+### How It Works
+
+1. **Create named lists**: Organize items by purpose (Weekly Staples, Party Supplies, etc.)
+2. **Add products**: Search and add products to any list with default quantities
+3. **Smart ordering**: Order entire lists with pantry-aware skipping
+4. **Track usage**: System remembers how often you order each item
+
+### Favorite Lists Tools
+
+| Tool | Purpose |
+|------|---------|
+| `create_favorite_list` | Create a new named list |
+| `get_favorite_lists` | View all lists with item counts |
+| `rename_favorite_list` | Rename or update description |
+| `delete_favorite_list` | Delete a list (cannot delete default) |
+| `add_to_favorite_list` | Add product to a list |
+| `remove_from_favorite_list` | Remove product from list |
+| `get_favorite_list_items` | View items with pantry status |
+| `order_favorite_list` | Order list items to cart |
+| `suggest_favorites` | Get suggestions from purchase history |
+
+### Example List Workflow
+
+```
+User: "Create a weekly staples list"
+→ create_favorite_list(name="Weekly Staples", list_type="weekly")
+→ Returns: list_id="weekly-staples-abc123"
+
+User: "Add organic milk to my weekly staples"
+→ search_products("organic milk")
+→ add_to_favorite_list(product_id, list_id="weekly-staples-abc123")
+
+User: "Order my weekly staples"
+→ order_favorite_list(list_id="weekly-staples-abc123", skip_if_stocked=True)
+→ Shows: "Added 5 items, skipped 3 (well-stocked in pantry)"
+```
+
+### Smart Ordering with Pantry Integration
+
+When you order a favorite list, the system checks pantry levels:
+- Items with pantry level **above threshold** (default 30%) are skipped
+- Items **below threshold** or **not tracked** are ordered
+- You can override with `skip_if_stocked=False` to order everything
+
+### List Types
+
+- **custom**: General purpose lists (default)
+- **weekly**: Items you buy every week
+- **monthly**: Items you buy monthly
+- **seasonal**: Holiday-specific items
+
+### Default List
+
+A "My Favorites" list is auto-created. Use it for quick favorites without creating custom lists:
+```
+add_to_favorite_list(product_id, description)  # Uses default list
+order_favorite_list()  # Orders from default list
+```
+
+---
+
 ## Food Quality Guidelines
 
 ### ALWAYS Prefer:
@@ -523,6 +588,17 @@ After shopping is complete:
 | `check_recipe_pantry` | Check if pantry has recipe ingredients |
 | `generate_recipe_shopping_list` | Optimized list for multiple recipes |
 | `get_cookable_recipes` | Find recipes makeable with current pantry |
+
+### Favorite Lists
+| Tool | Use For |
+|------|---------|
+| `create_favorite_list` | Create named list (Weekly Staples, etc.) |
+| `get_favorite_lists` | View all lists with item counts |
+| `add_to_favorite_list` | Add product to a list |
+| `remove_from_favorite_list` | Remove product from list |
+| `get_favorite_list_items` | View items with pantry levels |
+| `order_favorite_list` | Order list items (skip well-stocked) |
+| `suggest_favorites` | Get suggestions from purchase history |
 
 ### Configuration
 | Tool | Use For |

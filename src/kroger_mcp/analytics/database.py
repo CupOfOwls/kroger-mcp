@@ -171,6 +171,35 @@ def initialize_database() -> None:
                 FOREIGN KEY (product_id) REFERENCES products(product_id)
             );
 
+            -- Favorite lists (named shopping lists)
+            CREATE TABLE IF NOT EXISTS favorite_lists (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                list_type TEXT DEFAULT 'custom',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Favorite list items (products in each list)
+            CREATE TABLE IF NOT EXISTS favorite_list_items (
+                list_id TEXT NOT NULL,
+                product_id TEXT NOT NULL,
+                description TEXT NOT NULL,
+                brand TEXT,
+                default_quantity INTEGER DEFAULT 1,
+                preferred_modality TEXT DEFAULT 'PICKUP',
+                notes TEXT,
+                added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                times_ordered INTEGER DEFAULT 0,
+                PRIMARY KEY (list_id, product_id),
+                FOREIGN KEY (list_id) REFERENCES favorite_lists(id) ON DELETE CASCADE
+            );
+
+            -- Create default favorites list
+            INSERT OR IGNORE INTO favorite_lists (id, name, description, list_type)
+            VALUES ('default', 'My Favorites', 'Default favorites list', 'custom');
+
             -- Indexes for performance
             CREATE INDEX IF NOT EXISTS idx_purchase_events_product
                 ON purchase_events(product_id);
@@ -190,6 +219,10 @@ def initialize_database() -> None:
                 ON pantry_items(product_id);
             CREATE INDEX IF NOT EXISTS idx_pantry_items_level
                 ON pantry_items(level_percent);
+            CREATE INDEX IF NOT EXISTS idx_favorite_list_items_list
+                ON favorite_list_items(list_id);
+            CREATE INDEX IF NOT EXISTS idx_favorite_list_items_product
+                ON favorite_list_items(product_id);
         """)
         conn.commit()
     finally:
@@ -208,6 +241,9 @@ def ensure_initialized() -> None:
 
     # Initialize database schema
     initialize_database()
+
+    # Run schema migrations for new columns
+    run_schema_migrations()
 
     # Check if migration is needed
     from .migration import needs_migration, migrate_json_to_sqlite
@@ -235,9 +271,41 @@ def get_table_counts() -> dict:
         counts = {}
         for table in ['products', 'purchase_events', 'orders',
                       'product_statistics', 'seasonal_patterns',
-                      'recipes', 'recipe_ingredients', 'pantry_items']:
+                      'recipes', 'recipe_ingredients', 'pantry_items',
+                      'favorite_lists', 'favorite_list_items']:
             cursor = conn.execute(f"SELECT COUNT(*) FROM {table}")
             counts[table] = cursor.fetchone()[0]
         return counts
+    finally:
+        conn.close()
+
+
+def run_schema_migrations() -> None:
+    """
+    Run schema migrations to add new columns to existing tables.
+
+    This is idempotent - safe to run multiple times.
+    """
+    conn = get_db_connection()
+    try:
+        # Get existing columns in product_statistics
+        cursor = conn.execute("PRAGMA table_info(product_statistics)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+        # Add new columns if they don't exist
+        new_columns = [
+            ("trend_direction", "TEXT DEFAULT 'stable'"),
+            ("trend_strength", "REAL DEFAULT 0.0"),
+            ("quantity_adjusted_rate", "REAL DEFAULT NULL"),
+            ("prediction_accuracy", "REAL DEFAULT NULL"),
+        ]
+
+        for col_name, col_def in new_columns:
+            if col_name not in existing_columns:
+                conn.execute(
+                    f"ALTER TABLE product_statistics ADD COLUMN {col_name} {col_def}"
+                )
+
+        conn.commit()
     finally:
         conn.close()

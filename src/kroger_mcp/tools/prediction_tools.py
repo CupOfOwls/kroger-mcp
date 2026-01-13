@@ -747,3 +747,141 @@ def register_tools(mcp):
                 "success": False,
                 "error": f"Failed to remove from pantry: {str(e)}"
             }
+
+    # ========== Configuration Tools ==========
+
+    @mcp.tool()
+    async def configure_predictions(
+        ewma_alpha: Optional[float] = Field(
+            default=None, ge=0.1, le=0.9,
+            description="EWMA decay factor (0.1-0.9). Lower = more weight on recent"
+        ),
+        routine_buffer: Optional[float] = Field(
+            default=None, ge=0.0, le=2.0,
+            description="Safety buffer for routine items (std dev multiplier)"
+        ),
+        regular_buffer: Optional[float] = Field(
+            default=None, ge=0.0, le=2.0,
+            description="Safety buffer for regular items (std dev multiplier)"
+        ),
+        treat_buffer: Optional[float] = Field(
+            default=None, ge=0.0, le=2.0,
+            description="Safety buffer for treat items (std dev multiplier)"
+        ),
+        routine_max_days: Optional[int] = Field(
+            default=None, ge=1, le=30,
+            description="Max days between purchases for 'routine' category"
+        ),
+        regular_max_days: Optional[int] = Field(
+            default=None, ge=15, le=120,
+            description="Max days between purchases for 'regular' category"
+        ),
+        ctx: Context = None
+    ) -> Dict[str, Any]:
+        """
+        Configure prediction parameters and category thresholds.
+
+        All parameters are optional - only specified values will be updated.
+        Use this to tune predictions based on your preferences.
+
+        Examples:
+        - Set ewma_alpha=0.2 to give more weight to recent purchases
+        - Set routine_buffer=1.5 for extra safety on essentials
+        - Set routine_max_days=7 for stricter routine classification
+
+        Args:
+            ewma_alpha: EWMA decay factor (lower = more weight on recent)
+            routine_buffer: Std dev multiplier for routine items
+            regular_buffer: Std dev multiplier for regular items
+            treat_buffer: Std dev multiplier for treat items
+            routine_max_days: Category threshold for routine items
+            regular_max_days: Category threshold for regular items
+
+        Returns:
+            Updated configuration
+        """
+        try:
+            from ..analytics.config import update_config, get_config_summary
+
+            # Build update kwargs from provided values
+            kwargs = {}
+            if ewma_alpha is not None:
+                kwargs['ewma_alpha'] = ewma_alpha
+            if routine_buffer is not None:
+                kwargs['buffer_routine'] = routine_buffer
+            if regular_buffer is not None:
+                kwargs['buffer_regular'] = regular_buffer
+            if treat_buffer is not None:
+                kwargs['buffer_treat'] = treat_buffer
+            if routine_max_days is not None:
+                kwargs['routine_max_days'] = routine_max_days
+            if regular_max_days is not None:
+                kwargs['regular_max_days'] = regular_max_days
+
+            if kwargs:
+                result = update_config(**kwargs)
+            else:
+                result = {'success': True, 'message': 'No changes specified'}
+
+            # Always return current config summary
+            result['current_config'] = get_config_summary()
+            return result
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to configure predictions: {str(e)}"
+            }
+
+    @mcp.tool()
+    async def get_prediction_config(
+        ctx: Context = None
+    ) -> Dict[str, Any]:
+        """
+        View current prediction configuration settings.
+
+        Returns all configurable parameters with their current values
+        and descriptions.
+
+        Returns:
+            Current configuration summary
+        """
+        try:
+            from ..analytics.config import get_config_summary
+
+            return {
+                "success": True,
+                "config": get_config_summary()
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to get config: {str(e)}"
+            }
+
+    @mcp.tool()
+    async def reset_prediction_config(
+        ctx: Context = None
+    ) -> Dict[str, Any]:
+        """
+        Reset prediction configuration to defaults.
+
+        This will reset all prediction parameters to their default values.
+
+        Returns:
+            Default configuration
+        """
+        try:
+            from ..analytics.config import reset_config, get_config_summary
+
+            reset_config()
+            return {
+                "success": True,
+                "message": "Configuration reset to defaults",
+                "config": get_config_summary()
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to reset config: {str(e)}"
+            }

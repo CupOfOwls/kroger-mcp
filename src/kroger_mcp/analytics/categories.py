@@ -12,11 +12,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .database import get_db_connection, ensure_initialized
-
-# Category thresholds (in days)
-ROUTINE_MAX_DAYS = 14
-REGULAR_MAX_DAYS = 60
-SEASONALITY_THRESHOLD = 0.7  # High seasonality = treat
+from .config import load_config
 
 
 @dataclass
@@ -36,6 +32,8 @@ def detect_category(
     """
     Auto-detect product category based on purchase patterns.
 
+    Uses configurable thresholds from config.py.
+
     Args:
         avg_days: Average days between purchases
         seasonality_score: 0-1 score (higher = more seasonal)
@@ -44,22 +42,24 @@ def detect_category(
     Returns:
         Category string: 'routine', 'regular', 'treat', or 'uncategorized'
     """
+    config = load_config()
+
     # Need at least 3 purchases for reliable detection
     if total_purchases < 3:
         return 'uncategorized'
 
     # Check for seasonal patterns first
-    if seasonality_score > SEASONALITY_THRESHOLD:
+    if seasonality_score > config.seasonality_threshold:
         return 'treat'
 
     # No average days means not enough data
     if avg_days is None:
         return 'uncategorized'
 
-    # Frequency-based categorization
-    if avg_days <= ROUTINE_MAX_DAYS:
+    # Frequency-based categorization (using config thresholds)
+    if avg_days <= config.routine_max_days:
         return 'routine'
-    elif avg_days <= REGULAR_MAX_DAYS:
+    elif avg_days <= config.regular_max_days:
         return 'regular'
     else:
         # Infrequent purchases - could be treat or just rare

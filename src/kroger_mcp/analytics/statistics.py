@@ -11,6 +11,14 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .database import get_db_connection, ensure_initialized
+from .config import load_config
+from .trend_analysis import (
+    detect_trend,
+    calculate_recency_score,
+    calculate_quantity_consistency,
+    calculate_enhanced_confidence,
+    calculate_quantity_adjusted_rate
+)
 
 
 @dataclass
@@ -20,10 +28,15 @@ class ConsumptionRate:
     std_dev: float
     confidence: float
     sample_size: int
+    # Enhanced fields
+    quantity_adjusted_rate: Optional[float] = None  # Days per unit
+    trend_direction: str = 'stable'  # stable, increasing, decreasing
+    trend_strength: float = 0.0  # 0-1
 
 
 def calculate_consumption_rate(
-    purchase_events: List[Dict[str, Any]]
+    purchase_events: List[Dict[str, Any]],
+    alpha: Optional[float] = None
 ) -> ConsumptionRate:
     """
     Calculate consumption rate using exponential weighted moving average.
@@ -32,9 +45,11 @@ def calculate_consumption_rate(
 
     Args:
         purchase_events: List of purchase events sorted by date (oldest first)
+        alpha: Optional EWMA decay factor (uses config default if not provided)
 
     Returns:
-        ConsumptionRate with average days between purchases, std dev, and confidence
+        ConsumptionRate with average days between purchases, std dev, confidence,
+        and enhanced trend/quantity analysis
     """
     if len(purchase_events) < 2:
         return ConsumptionRate(
@@ -44,8 +59,13 @@ def calculate_consumption_rate(
             sample_size=len(purchase_events)
         )
 
-    # Calculate intervals between purchases
+    # Load config for EWMA alpha
+    config = load_config()
+    decay = alpha if alpha is not None else config.ewma_alpha
+
+    # Calculate intervals and quantities between purchases
     intervals = []
+    quantities = []
     for i in range(1, len(purchase_events)):
         prev_date = _parse_date(purchase_events[i - 1].get('event_date', ''))
         curr_date = _parse_date(purchase_events[i].get('event_date', ''))
@@ -54,6 +74,12 @@ def calculate_consumption_rate(
             days = (curr_date - prev_date).days
             if days > 0:  # Only count positive intervals
                 intervals.append(days)
+                # Quantity for the starting purchase of this interval
+                quantities.append(purchase_events[i - 1].get('quantity', 1) or 1)
+
+    # Add last quantity for completeness
+    if purchase_events:
+        quantities.append(purchase_events[-1].get('quantity', 1) or 1)
 
     if not intervals:
         return ConsumptionRate(
@@ -63,9 +89,9 @@ def calculate_consumption_rate(
             sample_size=len(purchase_events)
         )
 
-    # Exponential weighted moving average
-    # Weights: newest = 1.0, each older = 0.5x previous
-    weights = [0.5 ** i for i in range(len(intervals))]
+    # Exponential weighted moving average with configurable decay
+    # Weights: newest = 1.0, each older = decay^i
+    weights = [decay ** i for i in range(len(intervals))]
     weights.reverse()  # Oldest first, so reverse to give newest highest weight
 
     ewma = sum(w * v for w, v in zip(weights, intervals)) / sum(weights)
@@ -73,21 +99,42 @@ def calculate_consumption_rate(
     # Standard deviation
     std_dev = stats.stdev(intervals) if len(intervals) > 1 else 0.0
 
-    # Confidence based on:
-    # 1. Number of data points (more = higher confidence, max at 10)
-    # 2. Consistency (lower std_dev relative to mean = higher confidence)
-    data_confidence = min(1.0, len(intervals) / 10)
+    # Interval consistency (lower variance = higher consistency)
     if ewma > 0:
-        consistency = 1 - min(1.0, std_dev / ewma)
+        interval_consistency = 1 - min(1.0, std_dev / ewma)
     else:
-        consistency = 0.0
-    confidence = data_confidence * consistency
+        interval_consistency = 0.0
+
+    # Enhanced: Detect consumption trend
+    trend_direction, trend_strength = detect_trend(intervals)
+
+    # Enhanced: Calculate quantity-adjusted rate (days per unit)
+    quantity_adjusted = calculate_quantity_adjusted_rate(intervals, quantities)
+
+    # Enhanced: Recency score
+    last_date = purchase_events[-1].get('event_date') if purchase_events else None
+    recency = calculate_recency_score(last_date)
+
+    # Enhanced: Quantity consistency
+    qty_consistency = calculate_quantity_consistency(quantities)
+
+    # Enhanced confidence using multiple factors
+    confidence = calculate_enhanced_confidence(
+        sample_size=len(intervals),
+        interval_consistency=interval_consistency,
+        recency_score=recency,
+        quantity_consistency=qty_consistency,
+        max_samples=config.max_confidence_purchases
+    )
 
     return ConsumptionRate(
         days_between=ewma,
         std_dev=std_dev,
         confidence=confidence,
-        sample_size=len(intervals)
+        sample_size=len(intervals),
+        quantity_adjusted_rate=quantity_adjusted,
+        trend_direction=trend_direction,
+        trend_strength=trend_strength
     )
 
 
@@ -163,14 +210,15 @@ def update_product_stats(product_id: str) -> Dict[str, Any]:
 
         now = datetime.now().isoformat()
 
-        # Upsert statistics
+        # Upsert statistics (including new trend fields)
         conn.execute("""
             INSERT INTO product_statistics
             (product_id, total_purchases, total_quantity, avg_quantity_per_purchase,
              avg_days_between_purchases, std_dev_days, last_purchase_date,
              first_purchase_date, purchase_frequency_score, seasonality_score,
-             detected_category, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             detected_category, trend_direction, trend_strength,
+             quantity_adjusted_rate, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(product_id) DO UPDATE SET
                 total_purchases = excluded.total_purchases,
                 total_quantity = excluded.total_quantity,
@@ -182,6 +230,9 @@ def update_product_stats(product_id: str) -> Dict[str, Any]:
                 purchase_frequency_score = excluded.purchase_frequency_score,
                 seasonality_score = excluded.seasonality_score,
                 detected_category = excluded.detected_category,
+                trend_direction = excluded.trend_direction,
+                trend_strength = excluded.trend_strength,
+                quantity_adjusted_rate = excluded.quantity_adjusted_rate,
                 updated_at = excluded.updated_at
         """, (
             product_id,
@@ -195,6 +246,9 @@ def update_product_stats(product_id: str) -> Dict[str, Any]:
             frequency_score,
             seasonality,
             detected_cat,
+            consumption.trend_direction,
+            consumption.trend_strength,
+            consumption.quantity_adjusted_rate,
             now
         ))
         conn.commit()
@@ -211,7 +265,10 @@ def update_product_stats(product_id: str) -> Dict[str, Any]:
             'first_purchase_date': first_date,
             'purchase_frequency_score': frequency_score,
             'seasonality_score': seasonality,
-            'detected_category': detected_cat
+            'detected_category': detected_cat,
+            'trend_direction': consumption.trend_direction,
+            'trend_strength': consumption.trend_strength,
+            'quantity_adjusted_rate': consumption.quantity_adjusted_rate
         }
     finally:
         conn.close()

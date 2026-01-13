@@ -151,11 +151,12 @@ fastmcp dev server.py --with-editable .
 
 ## 🛠️ Features
 
-This MCP server provides **62 tools** across 10 modules:
+This MCP server provides **71 tools** across 11 modules:
 - **Core Shopping**: Locations, products, cart management
 - **Smart Analytics**: Purchase predictions, consumption patterns, seasonal awareness
 - **Recipe Management**: Save recipes, selective ordering with skip items
 - **Pantry Tracking**: Inventory levels with auto-depletion estimates
+- **Favorite Lists**: Named shopping lists (Weekly Staples, Party Supplies, etc.)
 - **Reporting**: Spending analysis, pattern reports, data export
 
 ### 💬 Built-In MCP Prompts
@@ -164,7 +165,7 @@ This MCP server provides **62 tools** across 10 modules:
 - **Store Selection**: Help user set their preferred Kroger store
 - **Recipe Shopping**: Find recipes and add ingredients to cart
 
-### 📚 Available Tools (62 Total)
+### 📚 Available Tools (71 Total)
 
 #### Location Tools (6)
 
@@ -283,6 +284,22 @@ Analytics reports and recipe-pantry integration.
 | `check_recipe_pantry` | Check pantry inventory for recipe ingredients | No |
 | `generate_recipe_shopping_list` | Create optimized list for multiple recipes | No |
 | `get_cookable_recipes` | Find recipes makeable with current pantry | No |
+
+#### Favorite Lists Tools (9)
+
+Named shopping lists as a workaround for Kroger's Public API not supporting lists.
+
+| Tool | Description | Auth Required |
+|------|-------------|---------------|
+| `create_favorite_list` | Create a new named list (e.g., "Weekly Staples") | No |
+| `get_favorite_lists` | List all favorite lists with item counts | No |
+| `rename_favorite_list` | Rename or update list description | No |
+| `delete_favorite_list` | Delete a list and all its items | No |
+| `add_to_favorite_list` | Add product to a specific list | No |
+| `remove_from_favorite_list` | Remove product from a list | No |
+| `get_favorite_list_items` | Get all items in a list with pantry status | No |
+| `order_favorite_list` | Add list items to cart (skip well-stocked items) | Yes |
+| `suggest_favorites` | Suggest products based on purchase history | No |
 
 ### 🧰 Local-Only Cart Tracking
 
