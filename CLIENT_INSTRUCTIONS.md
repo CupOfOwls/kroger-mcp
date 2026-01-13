@@ -375,7 +375,7 @@ Since Kroger's Public API doesn't support shopping lists, this system provides *
 | `get_favorite_lists` | View all lists with item counts |
 | `rename_favorite_list` | Rename or update description |
 | `delete_favorite_list` | Delete a list (cannot delete default) |
-| `add_to_favorite_list` | Add product to a list |
+| `add_to_favorite_list` | Add product(s) to a list (single or bulk) |
 | `remove_from_favorite_list` | Remove product from list |
 | `get_favorite_list_items` | View items with pantry status |
 | `order_favorite_list` | Order list items to cart |
@@ -388,9 +388,16 @@ User: "Create a weekly staples list"
 → create_favorite_list(name="Weekly Staples", list_type="weekly")
 → Returns: list_id="weekly-staples-abc123"
 
-User: "Add organic milk to my weekly staples"
-→ search_products("organic milk")
-→ add_to_favorite_list(product_id, list_id="weekly-staples-abc123")
+User: "Add organic milk and eggs to my weekly staples"
+→ search_products("organic milk") → get product_id_1
+→ search_products("eggs") → get product_id_2
+→ add_to_favorite_list(
+    list_id="weekly-staples-abc123",
+    items=[
+        {"product_id": product_id_1, "description": "Organic Milk"},
+        {"product_id": product_id_2, "description": "Large Eggs"}
+    ]
+  )
 
 User: "Order my weekly staples"
 → order_favorite_list(list_id="weekly-staples-abc123", skip_if_stocked=True)
@@ -418,6 +425,34 @@ A "My Favorites" list is auto-created. Use it for quick favorites without creati
 add_to_favorite_list(product_id, description)  # Uses default list
 order_favorite_list()  # Orders from default list
 ```
+
+### Bulk Adding Items
+
+For efficiency, add multiple items at once using the `items` parameter:
+
+```
+User: "Add milk, eggs, and bread to my weekly staples"
+→ search_products for each item to get product_ids
+→ add_to_favorite_list(
+    list_id="weekly-staples-abc123",
+    items=[
+        {"product_id": "001", "description": "Milk 2%", "default_quantity": 2},
+        {"product_id": "002", "description": "Large Eggs"},
+        {"product_id": "003", "description": "Whole Wheat Bread"}
+    ]
+  )
+→ Returns: added_count=3, failed_count=0
+```
+
+**Item fields:**
+- `product_id` (required): Kroger product ID
+- `description` (required): Product description
+- `brand` (optional): Product brand
+- `default_quantity` (optional): Default quantity (default 1)
+- `preferred_modality` (optional): PICKUP or DELIVERY
+- `notes` (optional): Notes about the item
+
+**Bulk add handles duplicates gracefully** - items already in the list are reported as failed without blocking others.
 
 ---
 
@@ -594,7 +629,7 @@ After shopping is complete:
 |------|---------|
 | `create_favorite_list` | Create named list (Weekly Staples, etc.) |
 | `get_favorite_lists` | View all lists with item counts |
-| `add_to_favorite_list` | Add product to a list |
+| `add_to_favorite_list` | Add product(s) to a list (single or bulk) |
 | `remove_from_favorite_list` | Remove product from list |
 | `get_favorite_list_items` | View items with pantry levels |
 | `order_favorite_list` | Order list items (skip well-stocked) |
