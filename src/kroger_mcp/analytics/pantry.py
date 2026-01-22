@@ -88,6 +88,15 @@ def restock_item(
             row = cursor.fetchone()
             description = row['description'] if row else None
 
+        # Ensure product exists in products table (required for foreign key)
+        conn.execute("""
+            INSERT INTO products (product_id, description, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(product_id) DO UPDATE SET
+                description = COALESCE(excluded.description, products.description),
+                updated_at = excluded.updated_at
+        """, (product_id, description, now, now))
+
         # Upsert pantry item
         conn.execute("""
             INSERT INTO pantry_items
@@ -276,6 +285,15 @@ def add_to_pantry(
             )
             row = cursor.fetchone()
             description = row['description'] if row else None
+
+        # Ensure product exists in products table (required for foreign key)
+        conn.execute("""
+            INSERT INTO products (product_id, description, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(product_id) DO UPDATE SET
+                description = COALESCE(excluded.description, products.description),
+                updated_at = excluded.updated_at
+        """, (product_id, description, now, now))
 
         conn.execute("""
             INSERT INTO pantry_items
