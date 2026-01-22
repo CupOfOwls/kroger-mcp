@@ -6,7 +6,7 @@ where the browser-based authentication flow needs to be handled through user int
 rather than automated browser opening.
 """
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from fastmcp import Context
 from dotenv import load_dotenv
 from urllib.parse import urlparse, parse_qs
@@ -45,9 +45,8 @@ def register_auth_tools(mcp):
         # Generate a state parameter for CSRF protection
         _auth_state = _pkce_params.get('state', _pkce_params.get('code_verifier')[:16])
         
-        # Get client_id and redirect_uri from environment
+        # Get client_id from environment
         client_id = os.environ.get("KROGER_CLIENT_ID")
-        redirect_uri = os.environ.get("KROGER_REDIRECT_URI", "http://localhost:8000/callback")
         
         if not client_id:
             if ctx:
@@ -140,7 +139,6 @@ def register_auth_tools(mcp):
             # Get client credentials
             client_id = os.environ.get("KROGER_CLIENT_ID")
             client_secret = os.environ.get("KROGER_CLIENT_SECRET")
-            redirect_uri = os.environ.get("KROGER_REDIRECT_URI", "http://localhost:8000/callback")
             
             if not client_id or not client_secret:
                 if ctx:
@@ -155,7 +153,7 @@ def register_auth_tools(mcp):
             
             # Exchange the authorization code for tokens with the code verifier
             if ctx:
-                await ctx.info(f"Exchanging authorization code for tokens with code_verifier")
+                await ctx.info("Exchanging authorization code for tokens with code_verifier")
             
             # Use the code_verifier from the PKCE parameters
             token_info = kroger.authorization.get_token_with_authorization_code(
@@ -168,7 +166,7 @@ def register_auth_tools(mcp):
             _auth_state = None
             
             if ctx:
-                await ctx.info(f"Authentication successful!")
+                await ctx.info("Authentication successful!")
             
             # Return success response
             return {

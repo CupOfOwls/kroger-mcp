@@ -2,7 +2,7 @@
 User profile and authentication tools for Kroger MCP server
 """
 
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any
 from fastmcp import Context
 
 from .shared import get_authenticated_client, invalidate_authenticated_client

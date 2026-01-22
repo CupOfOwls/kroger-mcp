@@ -2,11 +2,10 @@
 Product search and management tools for Kroger MCP server
 """
 
-from typing import Dict, List, Any, Optional, Literal
+from typing import Dict, Any, Optional, Literal
 from pydantic import Field
 from fastmcp import Context, Image
 import requests
-from io import BytesIO
 
 from .shared import (
     get_client_credentials_client, 

@@ -4,7 +4,7 @@ Trend analysis utilities for purchase patterns.
 Provides trend detection, recency scoring, and enhanced confidence calculations.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Optional, Tuple
 
 

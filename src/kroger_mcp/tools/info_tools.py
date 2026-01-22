@@ -2,7 +2,7 @@
 Chain and department information tools for Kroger MCP server
 """
 
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any
 from fastmcp import Context
 
 from .shared import get_client_credentials_client

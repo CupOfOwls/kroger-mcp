@@ -8,7 +8,7 @@ Provides MCP tools for:
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastmcp import Context
 from pydantic import Field

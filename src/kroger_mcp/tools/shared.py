@@ -4,7 +4,7 @@ Shared utilities and client management for Kroger MCP server
 
 import os
 import json
-from typing import Optional, Dict, Any
+from typing import Optional
 from dotenv import load_dotenv
 
 from kroger_api.kroger_api import KrogerAPI

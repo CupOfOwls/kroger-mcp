@@ -5,8 +5,6 @@ CLI entry point for Kroger MCP server
 
 import argparse
 import os
-import sys
-from pathlib import Path
 
 def main():
     """CLI entry point with argument parsing"""

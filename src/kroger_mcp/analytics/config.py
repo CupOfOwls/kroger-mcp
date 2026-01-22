@@ -7,7 +7,7 @@ with persistence to kroger_preferences.json.
 
 import json
 import os
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from typing import Any, Dict, Optional
 
 # Config file location (same directory as other preferences)

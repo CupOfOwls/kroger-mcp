@@ -4,9 +4,8 @@ Analytics reporting and data export.
 Generates reports for spending, predictions, shopping patterns, and pantry status.
 """
 
-import json
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from .database import get_db_connection, ensure_initialized
 
@@ -146,9 +145,7 @@ def generate_prediction_accuracy_report() -> Dict[str, Any]:
         unknown = []
 
         for p in products:
-            accuracy = p.get('prediction_accuracy')
             trend = p.get('trend_direction', 'stable')
-            confidence = 0
 
             # Calculate implied accuracy from std_dev / avg_days
             avg_days = p.get('avg_days_between_purchases')
