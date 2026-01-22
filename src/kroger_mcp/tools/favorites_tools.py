@@ -328,6 +328,14 @@ def register_tools(mcp):
         Checks pantry levels and skips items that are still well-stocked.
         Uses each item's preferred modality unless overridden.
 
+        CONFIRMATION CHECKLIST (for client to follow):
+        1. [ ] First call get_favorite_list_items() to show user what's in the list
+        2. [ ] Show pantry status for each item
+        3. [ ] Ask user to confirm items to add/skip
+        4. [ ] Confirm modality preference (PICKUP/DELIVERY)
+        5. [ ] Get explicit "Yes, add to cart" confirmation
+        6. [ ] After adding, show summary and remind to review cart
+
         Args:
             list_id: Which list to order from
             skip_if_stocked: Skip items above pantry threshold

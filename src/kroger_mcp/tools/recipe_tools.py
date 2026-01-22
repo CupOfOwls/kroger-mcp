@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 from fastmcp import Context
 from pydantic import Field
 
-from .shared import get_authenticated_client, get_preferred_location_id
+from .shared import get_authenticated_client
 
 
 # Recipe storage file
@@ -462,212 +462,6 @@ def register_tools(mcp):
             return {"success": False, "error": f"Failed to preview: {str(e)}"}
 
     @mcp.tool()
-    async def order_recipe_ingredients(
-        recipe_id: str = Field(description="Recipe ID to order from"),
-        skip_items: List[str] = Field(
-            default=None,
-            description="Ingredient names to skip (items you already have)"
-        ),
-        modality: str = Field(
-            default="PICKUP",
-            description="Fulfillment method: PICKUP or DELIVERY"
-        ),
-        scale: float = Field(
-            default=1.0, ge=0.25, le=10.0,
-            description="Scale factor for quantities"
-        ),
-        auto_search: bool = Field(
-            default=True,
-            description="Search for products if ingredient has no product_id"
-        ),
-        ctx: Context = None
-    ) -> Dict[str, Any]:
-        """
-        Order ingredients from a saved recipe, skipping items user already has.
-
-        Workflow:
-        1. Load recipe and filter out skipped items
-        2. For items with product_id: add directly to cart
-        3. For items without product_id (if auto_search=True): search and add
-        4. Return summary of what was added/skipped/not found
-
-        Use preview_recipe_order first to show user what will be ordered.
-        """
-        try:
-            recipe = _find_recipe(recipe_id)
-            if not recipe:
-                return {
-                    "success": False,
-                    "error": f"Recipe '{recipe_id}' not found"
-                }
-
-            if ctx:
-                await ctx.info(f"Ordering ingredients for '{recipe.get('name')}'")
-
-            skip_items = skip_items or []
-            added_items = []
-            skipped_items = []
-            not_found = []
-            cart_items = []
-
-            # Get location for product search
-            location_id = get_preferred_location_id()
-
-            for ing in recipe.get("ingredients", []):
-                name = ing.get("name", "Unknown")
-                quantity = ing.get("quantity", 1)
-                product_id = ing.get("product_id")
-
-                # Check if should skip
-                if _ingredient_matches(name, skip_items):
-                    skipped_items.append({
-                        "name": name,
-                        "reason": "user already has item"
-                    })
-                    continue
-
-                # Scale quantity
-                scaled_qty = max(1, int(round(quantity * scale))) if quantity else 1
-
-                # If we have a product_id, use it directly
-                if product_id:
-                    cart_items.append({
-                        "product_id": product_id,
-                        "quantity": scaled_qty,
-                        "modality": modality,
-                        "name": name
-                    })
-                    added_items.append({
-                        "name": name,
-                        "product_id": product_id,
-                        "quantity": scaled_qty,
-                        "source": "saved_product_id"
-                    })
-                elif auto_search and location_id:
-                    # Try to search for the product
-                    if ctx:
-                        await ctx.info(f"Searching for '{name}'...")
-
-                    try:
-                        client = get_authenticated_client()
-                        results = client.products.search(
-                            search_term=name,
-                            location_id=location_id,
-                            limit=1
-                        )
-
-                        if results and len(results) > 0:
-                            found_product = results[0]
-                            found_id = found_product.get("productId")
-                            if found_id:
-                                cart_items.append({
-                                    "product_id": found_id,
-                                    "quantity": scaled_qty,
-                                    "modality": modality,
-                                    "name": name
-                                })
-                                added_items.append({
-                                    "name": name,
-                                    "product_id": found_id,
-                                    "quantity": scaled_qty,
-                                    "found_product": found_product.get(
-                                        "description", name
-                                    ),
-                                    "source": "auto_search"
-                                })
-                            else:
-                                not_found.append({
-                                    "name": name,
-                                    "reason": "no product ID in search result"
-                                })
-                        else:
-                            not_found.append({
-                                "name": name,
-                                "reason": "no products found"
-                            })
-                    except Exception as search_error:
-                        not_found.append({
-                            "name": name,
-                            "reason": f"search failed: {str(search_error)}"
-                        })
-                else:
-                    not_found.append({
-                        "name": name,
-                        "reason": "no product_id and auto_search disabled"
-                    })
-
-            # Add items to cart
-            if cart_items:
-                if ctx:
-                    await ctx.info(f"Adding {len(cart_items)} items to cart...")
-
-                try:
-                    client = get_authenticated_client()
-
-                    # Format for Kroger API
-                    api_items = [
-                        {
-                            "upc": item["product_id"],
-                            "quantity": item["quantity"],
-                            "modality": item["modality"]
-                        }
-                        for item in cart_items
-                    ]
-
-                    client.cart.add_to_cart(api_items)
-
-                    # Track in local cart (import here to avoid circular)
-                    from .cart_tools import _add_item_to_local_cart
-                    for item in cart_items:
-                        _add_item_to_local_cart(
-                            item["product_id"],
-                            item["quantity"],
-                            item["modality"]
-                        )
-
-                except Exception as cart_error:
-                    return {
-                        "success": False,
-                        "error": f"Failed to add to cart: {str(cart_error)}",
-                        "items_attempted": len(cart_items)
-                    }
-
-            # Update recipe stats
-            data = _load_recipes()
-            for r in data.get("recipes", []):
-                if r.get("id") == recipe_id:
-                    r["times_ordered"] = r.get("times_ordered", 0) + 1
-                    r["last_ordered_at"] = datetime.now().isoformat()
-                    break
-            _save_recipes(data)
-
-            return {
-                "success": True,
-                "recipe_name": recipe.get("name"),
-                "added_items": added_items,
-                "skipped_items": skipped_items,
-                "not_found": not_found,
-                "summary": {
-                    "total_added": len(added_items),
-                    "total_skipped": len(skipped_items),
-                    "total_not_found": len(not_found)
-                },
-                "modality": modality,
-                "scale": scale,
-                "message": (
-                    f"Added {len(added_items)} items to cart. "
-                    f"Skipped {len(skipped_items)} items. "
-                    f"{len(not_found)} items not found."
-                )
-            }
-
-        except Exception as e:
-            return {
-                "success": False,
-                "error": f"Failed to order ingredients: {str(e)}"
-            }
-
-    @mcp.tool()
     async def link_ingredient_to_product(
         recipe_id: str = Field(description="Recipe ID"),
         ingredient_index: int = Field(
@@ -714,3 +508,246 @@ def register_tools(mcp):
 
         except Exception as e:
             return {"success": False, "error": f"Failed to link: {str(e)}"}
+
+    # ========== Confirmation Workflow Tools ==========
+
+    @mcp.tool()
+    async def add_recipe_to_cart_with_confirmation(
+        recipe_id: str = Field(description="Recipe ID to order from"),
+        scale: float = Field(
+            default=1.0, ge=0.25, le=10.0,
+            description="Scale factor for quantities (2.0 = double recipe)"
+        ),
+        skip_items: List[str] = Field(
+            default=None,
+            description="Ingredient names to skip (items you already have)"
+        ),
+        modality: str = Field(
+            default="PICKUP",
+            description="Fulfillment method: PICKUP or DELIVERY"
+        ),
+        confirm: bool = Field(
+            default=False,
+            description="Set to True to actually add items (after preview)"
+        ),
+        ctx: Context = None
+    ) -> Dict[str, Any]:
+        """
+        Add recipe ingredients to cart with pantry/favorites cross-reference.
+
+        WORKFLOW (2-step process):
+        Step 1: Call with confirm=False (default)
+            - Returns preview with pantry status for each ingredient
+            - Shows what WILL be added vs what user already has
+            - DOES NOT add anything to cart
+
+        Step 2: Call with confirm=True after user approval
+            - Actually adds items to cart
+            - Returns order summary
+
+        The client MUST show the Step 1 preview to the user and get
+        explicit confirmation before calling Step 2.
+
+        Args:
+            recipe_id: Recipe to order from
+            scale: Multiply quantities by this factor
+            skip_items: Ingredient names to skip
+            modality: PICKUP or DELIVERY
+            confirm: False=preview only, True=add to cart
+
+        Returns:
+            Preview (confirm=False) or order summary (confirm=True)
+        """
+        try:
+            recipe = _find_recipe(recipe_id)
+            if not recipe:
+                return {
+                    "success": False,
+                    "error": f"Recipe '{recipe_id}' not found"
+                }
+
+            skip_items = skip_items or []
+
+            # Get pantry context for ingredients
+            pantry_context = {}
+            try:
+                from ..analytics.pantry import get_pantry_status
+                pantry_items = get_pantry_status(apply_depletion=True)
+                # Build lookup by product_id
+                for item in pantry_items:
+                    pantry_context[item['product_id']] = {
+                        "level_percent": item.get("level_percent", 0),
+                        "status": item.get("status"),
+                        "days_until_empty": item.get("days_until_empty")
+                    }
+            except Exception:
+                pass  # Pantry check is optional
+
+            # Process ingredients
+            ingredients_preview = []
+            items_to_add = []
+            items_to_skip = []
+            items_in_pantry = []
+
+            for i, ing in enumerate(recipe.get("ingredients", [])):
+                name = ing.get("name", "Unknown")
+                quantity = ing.get("quantity", 1)
+                unit = ing.get("unit", "")
+                product_id = ing.get("product_id")
+
+                scaled_qty = max(1, int(round(quantity * scale))) if quantity else 1
+
+                # Check if user wants to skip this
+                user_skip = _ingredient_matches(name, skip_items)
+
+                # Check pantry status
+                pantry = pantry_context.get(product_id, {}) if product_id else {}
+                pantry_level = pantry.get("level_percent")
+                in_pantry = pantry_level is not None
+
+                # Determine action
+                if user_skip:
+                    action = "SKIP"
+                    reason = "User specified to skip"
+                    items_to_skip.append(name)
+                elif in_pantry and pantry_level >= 30:
+                    action = "SKIP"
+                    reason = f"Pantry: {pantry_level}% remaining"
+                    items_in_pantry.append({
+                        "name": name,
+                        "pantry_level": pantry_level
+                    })
+                    items_to_skip.append(name)
+                else:
+                    action = "ADD"
+                    reason = "Not in pantry" if not in_pantry else f"Pantry low: {pantry_level}%"
+                    if product_id:
+                        items_to_add.append({
+                            "product_id": product_id,
+                            "name": name,
+                            "quantity": scaled_qty,
+                            "modality": modality
+                        })
+
+                ingredients_preview.append({
+                    "index": i,
+                    "name": name,
+                    "quantity": f"{scaled_qty} {unit}".strip(),
+                    "action": action,
+                    "reason": reason,
+                    "product_id": product_id,
+                    "pantry_level": pantry_level,
+                    "in_favorites": False  # Could check favorites too
+                })
+
+            # Preview mode - return what would be added
+            if not confirm:
+                return {
+                    "success": True,
+                    "confirmation_required": True,
+                    "preview": {
+                        "recipe_name": recipe.get("name"),
+                        "servings": int(recipe.get("servings", 4) * scale),
+                        "scale": scale,
+                        "modality": modality,
+                        "ingredients": ingredients_preview,
+                        "summary": {
+                            "items_to_add": len(items_to_add),
+                            "items_to_skip": len(items_to_skip),
+                            "items_in_pantry": len(items_in_pantry)
+                        }
+                    },
+                    "items_in_pantry": items_in_pantry,
+                    "next_step": (
+                        "Review the ingredients above. "
+                        "Call this tool again with confirm=True to add items to cart. "
+                        "Use skip_items to exclude any additional items."
+                    )
+                }
+
+            # Confirm mode - actually add to cart
+            if not items_to_add:
+                return {
+                    "success": True,
+                    "message": "No items to add - all ingredients are well-stocked or skipped",
+                    "items_ordered": [],
+                    "items_skipped": items_to_skip
+                }
+
+            if ctx:
+                await ctx.info(f"Adding {len(items_to_add)} items to cart...")
+
+            try:
+                client = get_authenticated_client()
+
+                # Format for Kroger API
+                api_items = [
+                    {
+                        "upc": item["product_id"],
+                        "quantity": item["quantity"],
+                        "modality": item["modality"]
+                    }
+                    for item in items_to_add
+                ]
+
+                client.cart.add_to_cart(api_items)
+
+                # Track in local cart
+                from .cart_tools import _add_item_to_local_cart
+                for item in items_to_add:
+                    _add_item_to_local_cart(
+                        item["product_id"],
+                        item["quantity"],
+                        item["modality"]
+                    )
+
+                # Update recipe stats
+                data = _load_recipes()
+                for r in data.get("recipes", []):
+                    if r.get("id") == recipe_id:
+                        r["times_ordered"] = r.get("times_ordered", 0) + 1
+                        r["last_ordered_at"] = datetime.now().isoformat()
+                        break
+                _save_recipes(data)
+
+                return {
+                    "success": True,
+                    "message": (
+                        f"Added {len(items_to_add)} items to cart for "
+                        f"'{recipe.get('name')}'"
+                    ),
+                    "items_ordered": [
+                        {
+                            "name": item["name"],
+                            "quantity": item["quantity"],
+                            "product_id": item["product_id"]
+                        }
+                        for item in items_to_add
+                    ],
+                    "items_skipped": items_to_skip,
+                    "modality": modality,
+                    "reminder": (
+                        "Please review your cart in the Kroger app before checkout. "
+                        "Would you like to update any pantry levels?"
+                    )
+                }
+
+            except Exception as cart_error:
+                error_msg = str(cart_error)
+                if "401" in error_msg or "Unauthorized" in error_msg:
+                    return {
+                        "success": False,
+                        "error": "Authentication failed. Run force_reauthenticate.",
+                        "details": error_msg
+                    }
+                return {
+                    "success": False,
+                    "error": f"Failed to add to cart: {error_msg}",
+                    "items_attempted": len(items_to_add)
+                }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to process recipe order: {str(e)}"
+            }

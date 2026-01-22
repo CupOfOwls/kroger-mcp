@@ -77,23 +77,38 @@ For each store, please show the full address, distance, and any special features
     @mcp.prompt()
     async def add_recipe_to_cart(recipe_type: str = "classic apple pie", ctx: Context = None) -> str:
         """
-        Generate a prompt to find a specific  recipe and add ingredients to cart. (default: classic apple pie)
-        
+        Generate a prompt to find a specific recipe and add ingredients to cart. (default: classic apple pie)
+
+        Uses the confirmation-based workflow to prevent accidental cart modifications.
+
         Args:
             recipe_type: The type of recipe to search for (e.g., "chicken curry", "vegetarian lasagna")
-            
+
         Returns:
             A prompt asking for a recipe and to add ingredients to cart
         """
         return f"""I'd like to make a recipe: {recipe_type}. Can you help me with the following:
 
+STEP 1: Find and save the recipe
 1. Search the web for a good {recipe_type} recipe
 2. Present the recipe with ingredients and instructions
-3. Look up each ingredient in my local Kroger store
-4. Add all the ingredients I'll need to my cart using bulk_add_to_cart
-5. If any ingredients aren't available, suggest alternatives
+3. Use save_recipe to save it for future use
 
-Before adding items to cart, please ask me if I prefer pickup or delivery for these items.
+STEP 2: Preview the order (DO NOT add to cart yet)
+4. Use add_recipe_to_cart_with_confirmation with confirm=False to preview:
+   - Which ingredients will be added to cart
+   - Which items I already have in my pantry (to skip)
+   - Estimated prices for each item
+5. Show me the preview and ask which items I want to skip
+6. Ask if I prefer PICKUP or DELIVERY
+
+STEP 3: Confirm and add to cart
+7. ONLY after I explicitly confirm, call add_recipe_to_cart_with_confirmation
+   with confirm=True and my selected skip_items list
+8. Show the final summary of what was added
+
+IMPORTANT: Never add items to my cart without showing me a preview first
+and getting my explicit "yes, add to cart" confirmation.
 """
 
     @mcp.prompt()
@@ -190,30 +205,48 @@ Present this as a brief shopping intelligence report with actionable recommendat
         ctx: Context = None
     ) -> str:
         """
-        Generate a prompt to order ingredients from a saved recipe with opt-out.
+        Generate a prompt to order ingredients from a saved recipe with confirmation.
+
+        Uses the confirmation-based workflow to prevent accidental cart modifications.
 
         Args:
             recipe_name: Name or partial name of the saved recipe
 
         Returns:
-            A prompt for ordering recipe ingredients with skip options
+            A prompt for ordering recipe ingredients with confirmation workflow
         """
         return f"""I want to make {recipe_name} from my saved recipes.
 
-Please help me order the ingredients:
+Please help me order the ingredients using the confirmation workflow:
 
+STEP 1: Find and display the recipe
 1. Use search_recipes to find my "{recipe_name}" recipe
 2. Use get_recipe to show me the full ingredient list
 3. Ask me which ingredients I already have at home
-4. Use preview_recipe_order to show what will be ordered (skipping items I have)
-5. Confirm the order details and ask if I want PICKUP or DELIVERY
-6. Use order_recipe_ingredients with skip_items for items I already have
+
+STEP 2: Preview the order (DO NOT add to cart yet)
+4. Use add_recipe_to_cart_with_confirmation with confirm=False to preview:
+   - Which ingredients will be added to cart
+   - My current pantry levels for each item
+   - Items that will be skipped based on my pantry
+   - Estimated prices for items being ordered
+5. Ask if I want PICKUP or DELIVERY
+6. Show me the complete preview and ask for confirmation
+
+STEP 3: Confirm and add to cart
+7. ONLY after I say "yes" or confirm, call add_recipe_to_cart_with_confirmation
+   with confirm=True and my skip_items list
+8. Show the final summary of what was added to cart
 
 For each ingredient, show:
 - Name and quantity needed
 - Whether it has a linked Kroger product
+- Current pantry level (if tracked)
 - Estimated price if available
 
 If any ingredients aren't linked to products yet, search for them and offer to
 link them using link_ingredient_to_product for future orders.
+
+IMPORTANT: Never add items to my cart without showing me a preview first
+and getting my explicit confirmation.
 """

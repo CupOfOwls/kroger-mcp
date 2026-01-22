@@ -4,9 +4,10 @@ Cart tracking and management functionality
 import json
 import os
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from fastmcp import Context
+from pydantic import Field
 from .shared import get_authenticated_client
 
 
@@ -102,7 +103,154 @@ def _add_item_to_local_cart(product_id: str, quantity: int, modality: str, produ
 
 def register_tools(mcp):
     """Register cart-related tools with the FastMCP server"""
-    
+
+    # ========== Shopping Context Tool ==========
+
+    @mcp.tool()
+    async def get_shopping_context(
+        product_ids: Optional[List[str]] = Field(
+            default=None,
+            description="Product IDs to check. If None, returns all pantry/favorites context."
+        ),
+        pantry_threshold: int = Field(
+            default=30,
+            ge=0,
+            le=100,
+            description="Items above this pantry level (%) are suggested to skip"
+        ),
+        ctx: Context = None
+    ) -> Dict[str, Any]:
+        """
+        Get pantry levels, favorite status, and recommendations for products.
+
+        IMPORTANT: Call this BEFORE adding items to cart to show user
+        what they already have and may want to skip.
+
+        This tool enables smart shopping by cross-referencing:
+        - Pantry inventory levels (what you have)
+        - Favorite lists (frequently purchased items)
+        - Low inventory alerts (what you need)
+
+        Args:
+            product_ids: Optional list of product IDs to check
+            pantry_threshold: Items above this level suggest skipping (default 30%)
+
+        Returns:
+            - pantry_items: Current levels for tracked items
+            - favorite_matches: Which favorite lists contain these products
+            - skip_suggestions: Items above pantry threshold (don't need to buy)
+            - low_inventory_alerts: Items below 20% that should be ordered
+        """
+        try:
+            from ..analytics.pantry import get_pantry_status
+            from ..analytics.favorites import get_lists, get_list_items
+
+            result = {
+                "success": True,
+                "pantry_items": [],
+                "favorite_matches": [],
+                "skip_suggestions": [],
+                "low_inventory_alerts": [],
+                "summary": {}
+            }
+
+            # Get all pantry items with current levels
+            pantry_items = get_pantry_status(apply_depletion=True)
+
+            # If specific product_ids provided, filter pantry items
+            if product_ids:
+                product_id_set = set(product_ids)
+                filtered_pantry = [
+                    item for item in pantry_items
+                    if item['product_id'] in product_id_set
+                ]
+            else:
+                filtered_pantry = pantry_items
+
+            result["pantry_items"] = filtered_pantry
+
+            # Categorize pantry items
+            for item in filtered_pantry:
+                level = item.get('level_percent', 0)
+                if level >= pantry_threshold:
+                    result["skip_suggestions"].append({
+                        "product_id": item['product_id'],
+                        "description": item.get('description'),
+                        "level_percent": level,
+                        "reason": f"Pantry at {level}% (above {pantry_threshold}% threshold)"
+                    })
+                elif level <= 20:
+                    result["low_inventory_alerts"].append({
+                        "product_id": item['product_id'],
+                        "description": item.get('description'),
+                        "level_percent": level,
+                        "days_until_empty": item.get('days_until_empty'),
+                        "urgency": "high" if level <= 10 else "medium"
+                    })
+
+            # Check which favorite lists contain these products
+            all_lists = get_lists()
+            for fav_list in all_lists:
+                list_id = fav_list['id']  # get_lists returns 'id', not 'list_id'
+                list_items = get_list_items(list_id, include_pantry_status=False)
+
+                if list_items.get('success') and list_items.get('items'):
+                    list_product_ids = {
+                        item['product_id'] for item in list_items['items']
+                    }
+
+                    # Find matches
+                    if product_ids:
+                        matching_ids = list_product_ids.intersection(set(product_ids))
+                    else:
+                        matching_ids = list_product_ids
+
+                    if matching_ids:
+                        result["favorite_matches"].append({
+                            "list_id": list_id,
+                            "list_name": fav_list['name'],
+                            "matching_products": list(matching_ids),
+                            "match_count": len(matching_ids)
+                        })
+
+            # Build summary
+            result["summary"] = {
+                "pantry_items_checked": len(filtered_pantry),
+                "items_to_skip": len(result["skip_suggestions"]),
+                "low_inventory_count": len(result["low_inventory_alerts"]),
+                "favorite_list_matches": len(result["favorite_matches"]),
+                "pantry_threshold_used": pantry_threshold
+            }
+
+            # Add guidance message
+            if result["skip_suggestions"]:
+                result["guidance"] = (
+                    f"You have {len(result['skip_suggestions'])} items that are "
+                    f"well-stocked (>{pantry_threshold}%). Consider skipping these. "
+                    f"Ask the user to confirm before adding to cart."
+                )
+            elif result["low_inventory_alerts"]:
+                result["guidance"] = (
+                    f"You have {len(result['low_inventory_alerts'])} items running low. "
+                    "These should be prioritized for your next order."
+                )
+            else:
+                result["guidance"] = "No pantry data available for these products."
+
+            return result
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to get shopping context: {str(e)}",
+                "pantry_items": [],
+                "favorite_matches": [],
+                "skip_suggestions": [],
+                "low_inventory_alerts": []
+            }
+
+    # ========== Cart Management Tools ==========
+
     @mcp.tool()
     async def add_items_to_cart(
         product_id: str,
@@ -112,15 +260,23 @@ def register_tools(mcp):
     ) -> Dict[str, Any]:
         """
         Add a single item to the user's Kroger cart and track it locally.
-        
-        If the user doesn't specifically indicate a preference for pickup or delivery,
-        you should ask them which modality they prefer before calling this tool.
-        
+
+        IMPORTANT - CONFIRMATION WORKFLOW:
+        Before calling this tool, the client SHOULD:
+        1. Call get_shopping_context() to check pantry levels
+        2. Show user if they already have this item (pantry status)
+        3. Ask for confirmation: "Add [item] to cart?"
+        4. Confirm modality preference (PICKUP/DELIVERY)
+
+        After calling this tool:
+        - Show what was added
+        - Remind user to review cart in Kroger app before checkout
+
         Args:
             product_id: The product ID or UPC to add to cart
             quantity: Quantity to add (default: 1)
             modality: Fulfillment method - PICKUP or DELIVERY
-        
+
         Returns:
             Dictionary confirming the item was added to cart
         """
@@ -193,70 +349,154 @@ def register_tools(mcp):
     @mcp.tool()
     async def bulk_add_to_cart(
         items: List[Dict[str, Any]],
+        preview_only: bool = Field(
+            default=False,
+            description="If True, returns preview without adding to cart"
+        ),
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
         Add multiple items to the user's Kroger cart in a single operation.
-        
-        If the user doesn't specifically indicate a preference for pickup or delivery,
-        you should ask them which modality they prefer before calling this tool.
-        
+
+        CONFIRMATION WORKFLOW (2-step process):
+        Step 1: Call with preview_only=True
+            - Returns what WOULD be added without modifying cart
+            - Includes pantry context for each item
+            - DOES NOT add anything to cart
+
+        Step 2: Call with preview_only=False (default) after user approval
+            - Actually adds items to cart
+            - Returns confirmation summary
+
+        The client SHOULD show the preview to user and get explicit
+        confirmation before calling with preview_only=False.
+
         Args:
             items: List of items to add. Each item should have:
                    - product_id: The product ID or UPC
                    - quantity: Quantity to add (default: 1)
                    - modality: PICKUP or DELIVERY (default: PICKUP)
-        
+            preview_only: If True, returns preview without modifying cart
+
         Returns:
-            Dictionary with results for each item
+            Dictionary with preview (if preview_only) or confirmation
         """
         try:
+            # Build item list with details
+            formatted_items = []
+            for item in items:
+                formatted_items.append({
+                    "product_id": item["product_id"],
+                    "quantity": item.get("quantity", 1),
+                    "modality": item.get("modality", "PICKUP"),
+                    "description": item.get("description")
+                })
+
+            # Preview mode - return what would be added with pantry context
+            if preview_only:
+                # Get pantry context for these items
+                product_ids = [item["product_id"] for item in formatted_items]
+
+                pantry_context = {}
+                try:
+                    from ..analytics.pantry import get_pantry_item
+                    for pid in product_ids:
+                        pantry_item = get_pantry_item(pid)
+                        if pantry_item:
+                            pantry_context[pid] = {
+                                "level_percent": pantry_item.get("level_percent", 0),
+                                "status": pantry_item.get("status"),
+                                "days_until_empty": pantry_item.get("days_until_empty")
+                            }
+                except Exception:
+                    pass  # Pantry check is optional
+
+                # Build preview with recommendations
+                preview_items = []
+                skip_suggestions = []
+                for item in formatted_items:
+                    pid = item["product_id"]
+                    pantry = pantry_context.get(pid, {})
+                    level = pantry.get("level_percent")
+
+                    preview_item = {
+                        **item,
+                        "pantry_level": level,
+                        "pantry_status": pantry.get("status")
+                    }
+
+                    if level is not None and level >= 30:
+                        preview_item["recommendation"] = "SKIP"
+                        preview_item["reason"] = f"Pantry at {level}%"
+                        skip_suggestions.append(preview_item)
+                    else:
+                        preview_item["recommendation"] = "ADD"
+
+                    preview_items.append(preview_item)
+
+                return {
+                    "success": True,
+                    "preview_only": True,
+                    "confirmation_required": True,
+                    "items": preview_items,
+                    "summary": {
+                        "total_items": len(preview_items),
+                        "items_to_add": len([i for i in preview_items if i["recommendation"] == "ADD"]),
+                        "items_to_skip": len(skip_suggestions)
+                    },
+                    "skip_suggestions": skip_suggestions,
+                    "next_step": "Review items and call again with preview_only=False to add to cart"
+                }
+
+            # Actual add mode
             if ctx:
                 await ctx.info(f"Adding {len(items)} items to cart in bulk")
-            
+
             client = get_authenticated_client()
-            
+
             # Format items for the API
             cart_items = []
-            for item in items:
+            for item in formatted_items:
                 cart_item = {
                     "upc": item["product_id"],
-                    "quantity": item.get("quantity", 1),
-                    "modality": item.get("modality", "PICKUP")
+                    "quantity": item["quantity"],
+                    "modality": item["modality"]
                 }
                 cart_items.append(cart_item)
-            
+
             if ctx:
                 await ctx.info(f"Calling Kroger API to add {len(cart_items)} items")
-            
+
             # Add all items to the actual Kroger cart
             client.cart.add_to_cart(cart_items)
-            
+
             if ctx:
                 await ctx.info("Successfully added all items to Kroger cart")
-            
+
             # Add all items to local cart tracking
-            for item in items:
+            for item in formatted_items:
                 _add_item_to_local_cart(
                     item["product_id"],
-                    item.get("quantity", 1),
-                    item.get("modality", "PICKUP")
+                    item["quantity"],
+                    item["modality"]
                 )
-            
+
             if ctx:
                 await ctx.info("All items added to local cart tracking")
-            
+
             return {
                 "success": True,
                 "message": f"Successfully added {len(items)} items to cart",
                 "items_added": len(items),
-                "timestamp": datetime.now().isoformat()
+                "items": formatted_items,
+                "timestamp": datetime.now().isoformat(),
+                "reminder": "Review your cart in the Kroger app before checkout"
             }
-            
+
         except Exception as e:
             if ctx:
                 await ctx.error(f"Failed to bulk add items to cart: {str(e)}")
-            
+
             error_message = str(e)
             if "401" in error_message or "Unauthorized" in error_message:
                 return {

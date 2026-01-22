@@ -190,14 +190,19 @@ Use save_recipe with:
 
 **Key Feature:** When ordering from a saved recipe, users can skip items they already have!
 
+Uses the **confirmation workflow** to prevent accidental cart modifications:
+
 ```
 User: "Order my carbonara recipe, but I already have eggs and pasta"
 
 Workflow:
 1. Use search_recipes to find "carbonara"
-2. Use preview_recipe_order with skip_items=["eggs", "pasta"]
-3. Show user what will be ordered vs skipped
-4. Confirm and use order_recipe_ingredients with skip_items
+2. PREVIEW: Use add_recipe_to_cart_with_confirmation with confirm=False
+   - Shows what will be added vs skipped
+   - Includes pantry status for each ingredient
+3. Show user the preview, ask for confirmation
+4. EXECUTE: Use add_recipe_to_cart_with_confirmation with confirm=True
+   and skip_items=["eggs", "pasta"]
 ```
 
 ### Recipe Tools
@@ -211,7 +216,7 @@ Workflow:
 | `update_recipe` | Modify an existing recipe |
 | `delete_recipe` | Remove a saved recipe |
 | `preview_recipe_order` | Preview order with skip options |
-| `order_recipe_ingredients` | Order with selective opt-out |
+| `add_recipe_to_cart_with_confirmation` | Order with 2-step confirmation workflow |
 | `link_ingredient_to_product` | Link ingredient to Kroger product |
 
 ### Skip Items Feature
@@ -526,23 +531,44 @@ Would you like me to search for any of these options?"
 ### Reorder Saved Recipe
 **User:** "Order my carbonara recipe but I have eggs and cheese at home"
 
-**Response:**
-1. Search saved recipes for "carbonara"
-2. Use preview_recipe_order with skip_items=["eggs", "cheese"]
-3. Show the user:
-   ```
-   Ordering: Classic Carbonara (serves 4)
+**Response (Confirmation Workflow):**
 
+1. Search saved recipes for "carbonara"
+2. **STEP 1 - Preview (confirm=False):**
+   ```
+   add_recipe_to_cart_with_confirmation(
+       recipe_id="carbonara-abc123",
+       skip_items=["eggs", "cheese"],
+       confirm=False
+   )
+   ```
+3. Show the user the preview:
+   ```
+   Preview: Classic Carbonara (serves 4)
+
+   WILL ADD:
    ✓ Guanciale (8 oz) - $12.99
    ✓ Spaghetti (1 lb) - $2.49
    ✓ Black Pepper - $4.99
-   ✗ Eggs (4 large) - SKIPPED (you have)
-   ✗ Pecorino Romano - SKIPPED (you have)
+
+   WILL SKIP:
+   ✗ Eggs (4 large) - you have at home
+   ✗ Pecorino Romano - you have at home
 
    Total: $20.47 for 3 items
    ```
-4. Confirm PICKUP or DELIVERY preference
-5. Use order_recipe_ingredients with skip_items to add to cart
+4. Ask: "Would you like PICKUP or DELIVERY?"
+5. Ask: "Ready to add these to your cart?"
+6. **STEP 2 - Execute (confirm=True) after user says yes:**
+   ```
+   add_recipe_to_cart_with_confirmation(
+       recipe_id="carbonara-abc123",
+       skip_items=["eggs", "cheese"],
+       modality="PICKUP",
+       confirm=True
+   )
+   ```
+7. Remind user to review cart in Kroger app before checkout
 
 ---
 
@@ -564,6 +590,85 @@ Always recommend what's in season:
 
 ---
 
+## User Confirmation Protocol
+
+### CRITICAL: Never Add to Cart Without Confirmation
+
+All cart-modifying operations MUST follow this confirmation workflow to prevent accidental purchases.
+
+### Before Adding Items to Cart
+
+**Step 1: Check Context First**
+```
+Call get_shopping_context() with product IDs to see:
+- Current pantry levels for tracked items
+- Which favorite lists contain these products
+- Items suggested to skip (pantry > 30%)
+- Items urgently needed (pantry < 20%)
+```
+
+**Step 2: Present Smart Summary**
+- Show items user already has (pantry level > 30%)
+- Suggest items to skip
+- Highlight low inventory items worth adding
+- Display estimated prices
+
+**Step 3: Get Explicit Confirmation**
+- Ask: "Based on your pantry, you might want to skip [X, Y, Z]. Does this look right?"
+- Wait for user response before proceeding
+- Never assume silence means approval
+
+**Step 4: Confirm Modality**
+- Ask: "Would you like PICKUP or DELIVERY?"
+- Do not default without asking
+
+**Step 5: Final Confirmation**
+- Show complete order summary with items and prices
+- Ask: "Ready to add these items to your cart?"
+- Only proceed after explicit "yes" or confirmation
+
+**Step 6: Post-Order Reminder**
+- Remind user to review cart in Kroger app before checkout
+- Ask if they want to update pantry levels for items purchased elsewhere
+
+### Recipe Cart Operations
+
+For recipes, ALWAYS use `add_recipe_to_cart_with_confirmation`:
+
+```
+# Step 1: Preview (confirm=False)
+add_recipe_to_cart_with_confirmation(
+    recipe_id="abc123",
+    confirm=False  # Shows preview, does NOT add to cart
+)
+
+# Show user the preview, get confirmation
+
+# Step 2: Execute (confirm=True)
+add_recipe_to_cart_with_confirmation(
+    recipe_id="abc123",
+    skip_items=["eggs", "pasta"],  # Items user said they have
+    modality="PICKUP",
+    confirm=True  # Actually adds to cart
+)
+```
+
+### Bulk Cart Operations
+
+For bulk adds, use the `preview_only` parameter:
+
+```
+# Step 1: Preview
+bulk_add_to_cart(items=[...], preview_only=True)
+
+# Show preview, get confirmation
+
+# Step 2: Execute
+bulk_add_to_cart(items=[...], preview_only=False)
+```
+
+---
+
 ## Order Completion
 
 After shopping is complete:
@@ -581,8 +686,9 @@ After shopping is complete:
 | Tool | Use For |
 |------|---------|
 | `search_products` | Find ingredients at Kroger |
-| `add_items_to_cart` | Add single item |
-| `bulk_add_to_cart` | Add multiple items |
+| `get_shopping_context` | Check pantry/favorites before adding to cart |
+| `add_items_to_cart` | Add single item (with confirmation guidance) |
+| `bulk_add_to_cart` | Add multiple items (use preview_only=True first) |
 | `view_current_cart` | See what's in cart |
 | `mark_order_placed` | Record completed order |
 
@@ -602,7 +708,7 @@ After shopping is complete:
 | `get_recipes` | List saved recipes |
 | `search_recipes` | Find recipe by name/tag |
 | `preview_recipe_order` | Preview with skip options |
-| `order_recipe_ingredients` | Order with selective opt-out |
+| `add_recipe_to_cart_with_confirmation` | Order with 2-step confirmation workflow |
 | `link_ingredient_to_product` | Link to Kroger product |
 
 ### Pantry Tracking
