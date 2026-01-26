@@ -8,10 +8,11 @@ from fastmcp import Context, Image
 import requests
 
 from .shared import (
-    get_client_credentials_client, 
+    get_client_credentials_client,
     get_preferred_location_id,
     format_currency
 )
+from ..analytics.favorites import get_all_favorite_product_ids
 
 
 def register_tools(mcp):
@@ -145,20 +146,26 @@ def register_tools(mcp):
         limit: int = Field(default=10, ge=1, le=50, description="Number of results to return (1-50)"),
         fulfillment: Optional[Literal["csp", "delivery", "pickup"]] = None,
         brand: Optional[str] = None,
+        prioritize_favorites: bool = Field(default=True, description="Boost favorite items to top of results"),
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
         Search for products at a Kroger store.
-        
+
+        Favorites prioritization: Products that are in any of your favorite lists
+        will be boosted to the top of search results (if they match the search).
+        Each product includes an 'is_favorite' field.
+
         Args:
             search_term: Product search term (e.g., "milk", "bread", "organic apples")
             location_id: Store location ID (uses preferred location if not provided)
             limit: Number of results to return (1-50)
             fulfillment: Filter by fulfillment method (csp=curbside pickup, delivery, pickup)
             brand: Filter by brand name
-        
+            prioritize_favorites: Boost favorite items to top of results (default: True)
+
         Returns:
-            Dictionary containing product search results
+            Dictionary containing product search results with favorites prioritized
         """
         # Use preferred location if none provided
         if not location_id:
@@ -250,10 +257,33 @@ def register_tools(mcp):
                     ]
                 
                 formatted_products.append(formatted_product)
-            
+
+            # Get favorite product IDs for prioritization
+            favorite_ids = set()
+            if prioritize_favorites:
+                try:
+                    favorite_ids = get_all_favorite_product_ids()
+                except Exception:
+                    # Gracefully handle if favorites DB not available
+                    pass
+
+            # Mark favorites and optionally reorder
+            favorites_count = 0
+            for product in formatted_products:
+                is_fav = product.get("product_id") in favorite_ids
+                product["is_favorite"] = is_fav
+                if is_fav:
+                    favorites_count += 1
+
+            # Reorder: favorites first, preserving API order within each group
+            if prioritize_favorites and favorites_count > 0:
+                favorite_products = [p for p in formatted_products if p["is_favorite"]]
+                non_favorite_products = [p for p in formatted_products if not p["is_favorite"]]
+                formatted_products = favorite_products + non_favorite_products
+
             if ctx:
-                await ctx.info(f"Found {len(formatted_products)} products")
-            
+                await ctx.info(f"Found {len(formatted_products)} products ({favorites_count} favorites)")
+
             return {
                 "success": True,
                 "search_params": {
@@ -261,9 +291,11 @@ def register_tools(mcp):
                     "location_id": location_id,
                     "limit": limit,
                     "fulfillment": fulfillment,
-                    "brand": brand
+                    "brand": brand,
+                    "prioritize_favorites": prioritize_favorites
                 },
                 "count": len(formatted_products),
+                "favorites_count": favorites_count,
                 "data": formatted_products
             }
             
@@ -398,17 +430,22 @@ def register_tools(mcp):
     async def search_products_by_id(
         product_id: str,
         location_id: Optional[str] = None,
+        prioritize_favorites: bool = Field(default=True, description="Boost favorite items to top of results"),
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
         Search for products by their specific product ID.
-        
+
+        Each product includes an 'is_favorite' field indicating if it's
+        in any of your favorite lists.
+
         Args:
             product_id: The product ID to search for
             location_id: Store location ID (uses preferred location if not provided)
-        
+            prioritize_favorites: Boost favorite items to top of results (default: True)
+
         Returns:
-            Dictionary containing matching products
+            Dictionary containing matching products with favorite status
         """
         # Use preferred location if none provided
         if not location_id:
@@ -459,20 +496,45 @@ def register_tools(mcp):
                     }
                 
                 formatted_products.append(formatted_product)
-            
+
+            # Get favorite product IDs for prioritization
+            favorite_ids = set()
+            if prioritize_favorites:
+                try:
+                    favorite_ids = get_all_favorite_product_ids()
+                except Exception:
+                    # Gracefully handle if favorites DB not available
+                    pass
+
+            # Mark favorites and optionally reorder
+            favorites_count = 0
+            for product in formatted_products:
+                is_fav = product.get("product_id") in favorite_ids
+                product["is_favorite"] = is_fav
+                if is_fav:
+                    favorites_count += 1
+
+            # Reorder: favorites first, preserving API order within each group
+            if prioritize_favorites and favorites_count > 0:
+                favorite_products = [p for p in formatted_products if p["is_favorite"]]
+                non_favorite_products = [p for p in formatted_products if not p["is_favorite"]]
+                formatted_products = favorite_products + non_favorite_products
+
             if ctx:
-                await ctx.info(f"Found {len(formatted_products)} products with ID '{product_id}'")
-            
+                await ctx.info(f"Found {len(formatted_products)} products with ID '{product_id}' ({favorites_count} favorites)")
+
             return {
                 "success": True,
                 "search_params": {
                     "product_id": product_id,
-                    "location_id": location_id
+                    "location_id": location_id,
+                    "prioritize_favorites": prioritize_favorites
                 },
                 "count": len(formatted_products),
+                "favorites_count": favorites_count,
                 "data": formatted_products
             }
-            
+
         except Exception as e:
             if ctx:
                 await ctx.error(f"Error searching products by ID: {str(e)}")

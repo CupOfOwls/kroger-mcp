@@ -12,6 +12,26 @@ from typing import Any, Dict, List, Optional
 from .database import get_db_cursor, ensure_initialized
 
 
+# ========== Helper Functions ==========
+
+
+def get_all_favorite_product_ids() -> set:
+    """
+    Get all product IDs across all favorite lists.
+
+    Returns a set of product_ids for fast O(1) lookup when checking
+    if a product is in any favorites list.
+
+    Returns:
+        Set of product_id strings
+    """
+    ensure_initialized()
+
+    with get_db_cursor() as cursor:
+        cursor.execute("SELECT DISTINCT product_id FROM favorite_list_items")
+        return {row["product_id"] for row in cursor.fetchall()}
+
+
 # ========== List Management ==========
 
 
