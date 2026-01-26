@@ -30,6 +30,7 @@ from .tools import prediction_tools
 from .tools import recipe_tools
 from .tools import reporting_tools
 from .tools import favorites_tools
+from .tools import meal_planner_tools
 
 # Import prompts
 from . import prompts
@@ -90,6 +91,7 @@ def create_server() -> FastMCP:
     recipe_tools.register_tools(mcp)
     reporting_tools.register_tools(mcp)
     favorites_tools.register_tools(mcp)
+    meal_planner_tools.register_tools(mcp)
 
     # Register prompts
     prompts.register_prompts(mcp)

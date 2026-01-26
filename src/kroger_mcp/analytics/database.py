@@ -196,6 +196,35 @@ def initialize_database() -> None:
                 FOREIGN KEY (list_id) REFERENCES favorite_lists(id) ON DELETE CASCADE
             );
 
+            -- Meal plans (weekly, monthly, or custom date ranges)
+            CREATE TABLE IF NOT EXISTS meal_plans (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                plan_type TEXT DEFAULT 'weekly',
+                is_template INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_ordered_at TEXT,
+                times_ordered INTEGER DEFAULT 0
+            );
+
+            -- Individual meal entries (recipe assignments to days/slots)
+            CREATE TABLE IF NOT EXISTS meal_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id TEXT NOT NULL,
+                recipe_id TEXT NOT NULL,
+                meal_date TEXT NOT NULL,
+                meal_slot TEXT NOT NULL,
+                servings_override INTEGER,
+                notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (plan_id) REFERENCES meal_plans(id) ON DELETE CASCADE,
+                UNIQUE(plan_id, meal_date, meal_slot)
+            );
+
             -- Create default favorites list
             INSERT OR IGNORE INTO favorite_lists (id, name, description, list_type)
             VALUES ('default', 'My Favorites', 'Default favorites list', 'custom');
@@ -223,6 +252,12 @@ def initialize_database() -> None:
                 ON favorite_list_items(list_id);
             CREATE INDEX IF NOT EXISTS idx_favorite_list_items_product
                 ON favorite_list_items(product_id);
+            CREATE INDEX IF NOT EXISTS idx_meal_entries_plan
+                ON meal_entries(plan_id);
+            CREATE INDEX IF NOT EXISTS idx_meal_entries_date
+                ON meal_entries(meal_date);
+            CREATE INDEX IF NOT EXISTS idx_meal_plans_dates
+                ON meal_plans(start_date, end_date);
         """)
         conn.commit()
     finally:
@@ -272,7 +307,8 @@ def get_table_counts() -> dict:
         for table in ['products', 'purchase_events', 'orders',
                       'product_statistics', 'seasonal_patterns',
                       'recipes', 'recipe_ingredients', 'pantry_items',
-                      'favorite_lists', 'favorite_list_items']:
+                      'favorite_lists', 'favorite_list_items',
+                      'meal_plans', 'meal_entries']:
             cursor = conn.execute(f"SELECT COUNT(*) FROM {table}")
             counts[table] = cursor.fetchone()[0]
         return counts
