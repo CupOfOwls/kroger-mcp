@@ -177,6 +177,8 @@ def initialize_database() -> None:
                 name TEXT NOT NULL UNIQUE,
                 description TEXT,
                 list_type TEXT DEFAULT 'custom',
+                reorder_weeks INTEGER DEFAULT NULL,
+                last_ordered_at TEXT DEFAULT NULL,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
@@ -340,6 +342,21 @@ def run_schema_migrations() -> None:
             if col_name not in existing_columns:
                 conn.execute(
                     f"ALTER TABLE product_statistics ADD COLUMN {col_name} {col_def}"
+                )
+
+        # Migrate favorite_lists table - add reorder schedule columns
+        cursor = conn.execute("PRAGMA table_info(favorite_lists)")
+        favorite_lists_columns = {row[1] for row in cursor.fetchall()}
+
+        favorite_lists_new_columns = [
+            ("reorder_weeks", "INTEGER DEFAULT NULL"),
+            ("last_ordered_at", "TEXT DEFAULT NULL"),
+        ]
+
+        for col_name, col_def in favorite_lists_new_columns:
+            if col_name not in favorite_lists_columns:
+                conn.execute(
+                    f"ALTER TABLE favorite_lists ADD COLUMN {col_name} {col_def}"
                 )
 
         conn.commit()

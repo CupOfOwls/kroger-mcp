@@ -29,33 +29,45 @@ def register_tools(mcp):
             default="custom",
             description="List type: 'custom', 'weekly', 'monthly', 'seasonal'"
         ),
+        reorder_weeks: int = Field(
+            default=None,
+            description="Reorder schedule in weeks (1-52). Set to create a recurring "
+                        "reorder reminder. When ordering, shows if list is overdue."
+        ),
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
-        Create a new named favorite list.
+        Create a new named favorite list with optional reorder schedule.
 
         Use lists to organize frequently purchased items. Each list can have
         its own products and can be ordered separately.
 
+        Set reorder_weeks to create a recurring schedule:
+        - reorder_weeks=1: Weekly reorder (every week)
+        - reorder_weeks=2: Bi-weekly reorder (every 2 weeks)
+        - reorder_weeks=4: Monthly reorder (every 4 weeks)
+
         Examples:
-        - "Weekly Staples" for items you buy every week
-        - "Party Supplies" for event shopping
-        - "Monthly Bulk" for less frequent purchases
+        - "Weekly Staples" with reorder_weeks=1 for items you buy every week
+        - "Bi-Weekly Groceries" with reorder_weeks=2
+        - "Monthly Bulk" with reorder_weeks=4
 
         Args:
             name: Unique name for the list
             description: Optional description
             list_type: Category type for the list
+            reorder_weeks: How often to reorder (1-52 weeks, None=no schedule)
 
         Returns:
-            Created list info with list_id
+            Created list info with list_id and reorder_status
         """
         from ..analytics.favorites import create_list
 
         result = create_list(
             name=name,
             description=description,
-            list_type=list_type
+            list_type=list_type,
+            reorder_weeks=reorder_weeks
         )
         return result
 
@@ -328,13 +340,17 @@ def register_tools(mcp):
         Checks pantry levels and skips items that are still well-stocked.
         Uses each item's preferred modality unless overridden.
 
+        If the list has a reorder schedule, shows whether it was overdue
+        and updates the last_ordered_at timestamp.
+
         CONFIRMATION CHECKLIST (for client to follow):
         1. [ ] First call get_favorite_list_items() to show user what's in the list
         2. [ ] Show pantry status for each item
-        3. [ ] Ask user to confirm items to add/skip
-        4. [ ] Confirm modality preference (PICKUP/DELIVERY)
-        5. [ ] Get explicit "Yes, add to cart" confirmation
-        6. [ ] After adding, show summary and remind to review cart
+        3. [ ] Check reorder_status - notify if overdue
+        4. [ ] Ask user to confirm items to add/skip
+        5. [ ] Confirm modality preference (PICKUP/DELIVERY)
+        6. [ ] Get explicit "Yes, add to cart" confirmation
+        7. [ ] After adding, show summary and remind to review cart
 
         Args:
             list_id: Which list to order from
@@ -343,9 +359,16 @@ def register_tools(mcp):
             modality: Override fulfillment method for all items
 
         Returns:
-            Summary of items added and skipped
+            Summary of items added/skipped, plus reorder_status if scheduled
         """
-        from ..analytics.favorites import get_list_items, increment_times_ordered
+        from ..analytics.favorites import (
+            get_list_items, get_list, increment_times_ordered, mark_list_ordered
+        )
+
+        # Get list info (for reorder status)
+        list_info = get_list(list_id)
+        if not list_info:
+            return {"success": False, "error": f"List '{list_id}' not found"}
 
         # Get all items with pantry status
         result = get_list_items(list_id, include_pantry_status=True)
@@ -389,7 +412,8 @@ def register_tools(mcp):
                 "items_ordered": [],
                 "items_skipped": items_skipped,
                 "order_count": 0,
-                "skip_count": len(items_skipped)
+                "skip_count": len(items_skipped),
+                "reorder_status": list_info.get("reorder_status")
             }
 
         # Use the cart API directly like bulk_add_to_cart does
@@ -425,7 +449,11 @@ def register_tools(mcp):
             ordered_ids = [i["product_id"] for i in items_to_order]
             increment_times_ordered(list_id, ordered_ids)
 
-            return {
+            # Mark the list as ordered (updates last_ordered_at)
+            order_result = mark_list_ordered(list_id)
+
+            # Build response with reorder info
+            response = {
                 "success": True,
                 "message": f"Added {len(items_to_order)} items, skipped {len(items_skipped)}",
                 "items_ordered": [
@@ -437,6 +465,22 @@ def register_tools(mcp):
                 "order_count": len(items_to_order),
                 "skip_count": len(items_skipped)
             }
+
+            # Include reorder status info if list has a schedule
+            if order_result.get("success"):
+                response["reorder_status"] = {
+                    "was_overdue": order_result.get("was_overdue", False),
+                    "ordered_at": order_result.get("ordered_at"),
+                    "next_due": order_result.get("reorder_status", {}).get("next_due_date"),
+                    "schedule_weeks": order_result.get("reorder_status", {}).get("reorder_weeks")
+                }
+
+                # Add a message if it was overdue
+                if order_result.get("was_overdue"):
+                    response["message"] += " (This list was OVERDUE for reorder)"
+
+            return response
+
         except Exception as e:
             error_msg = str(e)
             if "401" in error_msg or "Unauthorized" in error_msg:
@@ -498,4 +542,43 @@ def register_tools(mcp):
             min_purchases=min_purchases,
             min_frequency_score=min_frequency_score,
             limit=limit
+        )
+
+    # ========== Reorder Schedule Tools ==========
+
+    @mcp.tool()
+    async def update_list_schedule(
+        list_id: str = Field(
+            description="ID of the list to update schedule for"
+        ),
+        reorder_weeks: int = Field(
+            default=None,
+            description="Reorder schedule in weeks (1-52), or null/0 to disable schedule"
+        ),
+        ctx: Context = None
+    ) -> Dict[str, Any]:
+        """
+        Update the reorder schedule for an existing favorite list.
+
+        Set a schedule to get reminders when a list is due for reorder.
+        When you order a list, it shows if it was overdue.
+
+        Common schedules:
+        - reorder_weeks=1: Weekly (every week)
+        - reorder_weeks=2: Bi-weekly (every 2 weeks)
+        - reorder_weeks=4: Monthly (every 4 weeks)
+        - reorder_weeks=null: Disable schedule
+
+        Args:
+            list_id: The list ID to update
+            reorder_weeks: New schedule (1-52 weeks) or None to disable
+
+        Returns:
+            Updated schedule info with reorder_status
+        """
+        from ..analytics.favorites import update_list_schedule as update_schedule
+
+        return update_schedule(
+            list_id=list_id,
+            reorder_weeks=reorder_weeks
         )

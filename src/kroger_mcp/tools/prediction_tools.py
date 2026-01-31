@@ -9,7 +9,7 @@ Provides MCP tools for:
 """
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastmcp import Context
 from pydantic import Field
@@ -95,81 +95,121 @@ def register_tools(mcp):
 
     @mcp.tool()
     async def get_item_statistics(
-        product_id: str = Field(
-            description="The product ID to get statistics for"
+        product_id: str | List[str] = Field(
+            description=(
+                "Product ID or list of IDs (e.g., '001' or ['001', '002']). "
+                "Max 20 products per batch request."
+            )
         ),
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
-        Get detailed purchase statistics for a specific product.
+        Get detailed purchase statistics for product(s). Supports batch operations.
+
+        SINGLE MODE:
+            get_item_statistics(product_id="0001111041700")
+
+        BATCH MODE:
+            get_item_statistics(product_id=["0001111041700", "0001111089476"])
 
         Returns comprehensive data including purchase frequency, average quantities,
         consumption rate, seasonality score, and detected category.
 
-        Args:
-            product_id: The product identifier
-
         Returns:
-            Detailed statistics for the product
+            Single mode: Statistics for one product
+            Batch mode: {results: {product_id: statistics, ...}}
         """
+        # Normalize to list
+        ids = [product_id] if isinstance(product_id, str) else product_id
+        is_batch = len(ids) > 1
+
+        if len(ids) > 20:
+            return {
+                "success": False,
+                "error": "Maximum 20 products per batch request"
+            }
+
         try:
             from ..analytics.statistics import get_product_statistics
             from ..analytics.predictions import predict_repurchase_date
             from ..analytics.purchase_tracker import get_purchase_events
 
-            stats = get_product_statistics(product_id)
+            def get_stats_for_product(pid: str) -> Dict[str, Any]:
+                """Get statistics for a single product."""
+                stats = get_product_statistics(pid)
 
-            if not stats:
+                if not stats:
+                    return {
+                        "success": False,
+                        "error": f"No statistics found for product {pid}"
+                    }
+
+                # Get prediction
+                prediction = predict_repurchase_date(pid, stats)
+
+                # Get recent purchase history
+                events = get_purchase_events(pid, 'order_placed', limit=10)
+
                 return {
-                    "success": False,
-                    "error": f"No statistics found for product {product_id}"
+                    "success": True,
+                    "product_id": pid,
+                    "description": stats.get('description'),
+                    "brand": stats.get('brand'),
+                    "category": stats.get('category_type'),
+                    "is_manual_category": bool(stats.get('category_override')),
+                    "statistics": {
+                        "total_purchases": stats.get('total_purchases'),
+                        "total_quantity": stats.get('total_quantity'),
+                        "avg_quantity_per_purchase": round(
+                            stats.get('avg_quantity_per_purchase') or 0, 2),
+                        "avg_days_between_purchases": round(
+                            stats.get('avg_days_between_purchases') or 0, 1),
+                        "std_dev_days": round(stats.get('std_dev_days') or 0, 1),
+                        "first_purchase": stats.get('first_purchase_date'),
+                        "last_purchase": stats.get('last_purchase_date'),
+                        "purchase_frequency_score": round(
+                            stats.get('purchase_frequency_score') or 0, 3),
+                        "seasonality_score": round(
+                            stats.get('seasonality_score') or 0, 2)
+                    },
+                    "prediction": {
+                        "next_purchase_date": (
+                            prediction.predicted_date.isoformat()
+                            if prediction.predicted_date else None
+                        ),
+                        "days_until": prediction.days_until,
+                        "urgency": prediction.urgency,
+                        "urgency_label": prediction.urgency_label,
+                        "confidence": prediction.confidence
+                    },
+                    "recent_purchases": [
+                        {
+                            "date": e.get('event_date'),
+                            "quantity": e.get('quantity'),
+                            "modality": e.get('modality')
+                        }
+                        for e in events
+                    ]
                 }
 
-            # Get prediction
-            prediction = predict_repurchase_date(product_id, stats)
+            # Process all products
+            results = {pid: get_stats_for_product(pid) for pid in ids}
 
-            # Get recent purchase history
-            events = get_purchase_events(product_id, 'order_placed', limit=10)
-
-            return {
-                "success": True,
-                "product_id": product_id,
-                "description": stats.get('description'),
-                "brand": stats.get('brand'),
-                "category": stats.get('category_type'),
-                "is_manual_category": bool(stats.get('category_override')),
-                "statistics": {
-                    "total_purchases": stats.get('total_purchases'),
-                    "total_quantity": stats.get('total_quantity'),
-                    "avg_quantity_per_purchase": round(
-                        stats.get('avg_quantity_per_purchase') or 0, 2),
-                    "avg_days_between_purchases": round(
-                        stats.get('avg_days_between_purchases') or 0, 1),
-                    "std_dev_days": round(stats.get('std_dev_days') or 0, 1),
-                    "first_purchase": stats.get('first_purchase_date'),
-                    "last_purchase": stats.get('last_purchase_date'),
-                    "purchase_frequency_score": round(
-                        stats.get('purchase_frequency_score') or 0, 3),
-                    "seasonality_score": round(
-                        stats.get('seasonality_score') or 0, 2)
-                },
-                "prediction": {
-                    "next_purchase_date": (prediction.predicted_date.isoformat()
-                                           if prediction.predicted_date else None),
-                    "days_until": prediction.days_until,
-                    "urgency": prediction.urgency,
-                    "urgency_label": prediction.urgency_label,
-                    "confidence": prediction.confidence
-                },
-                "recent_purchases": [
-                    {
-                        "date": e.get('event_date'),
-                        "quantity": e.get('quantity'),
-                        "modality": e.get('modality')
+            if is_batch:
+                success_count = sum(1 for r in results.values() if r.get('success'))
+                return {
+                    "success": True,
+                    "results": results,
+                    "summary": {
+                        "total": len(ids),
+                        "successful": success_count,
+                        "failed": len(ids) - success_count
                     }
-                    for e in events
-                ]
-            }
+                }
+            else:
+                # Single mode - return flat response
+                return results[ids[0]]
+
         except Exception as e:
             return {
                 "success": False,
@@ -600,8 +640,11 @@ def register_tools(mcp):
 
     @mcp.tool()
     async def restock_pantry_item(
-        product_id: str = Field(
-            description="Product ID to mark as restocked"
+        product_id: str | List[str] = Field(
+            description=(
+                "Product ID or list of IDs to mark as restocked. "
+                "Max 50 products per batch request."
+            )
         ),
         level: int = Field(
             default=100, ge=0, le=100,
@@ -610,23 +653,65 @@ def register_tools(mcp):
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
-        Mark a pantry item as restocked (typically to 100%).
+        Mark pantry item(s) as restocked. Supports batch operations.
+
+        SINGLE MODE:
+            restock_pantry_item(product_id="0001111041700", level=100)
+
+        BATCH MODE:
+            restock_pantry_item(product_id=["001", "002", "003"], level=100)
 
         This is automatically called when orders are placed, but can be
         used manually when you restock from another source.
 
         Args:
-            product_id: The product to restock
+            product_id: Product ID or list of IDs to restock
             level: Level to set (default 100%)
 
         Returns:
-            Updated item info with new depletion rate
+            Single mode: Updated item info with new depletion rate
+            Batch mode: {results: {product_id: result, ...}}
         """
+        # Normalize to list
+        ids = [product_id] if isinstance(product_id, str) else product_id
+        is_batch = len(ids) > 1
+
+        if len(ids) > 50:
+            return {
+                "success": False,
+                "error": "Maximum 50 products per batch request"
+            }
+
         try:
             from ..analytics.pantry import restock_item
 
-            result = restock_item(product_id, level)
-            return result
+            results = {}
+            for pid in ids:
+                try:
+                    result = restock_item(pid, level)
+                    results[pid] = result
+                except Exception as e:
+                    results[pid] = {
+                        "success": False,
+                        "error": f"Failed to restock {pid}: {str(e)}"
+                    }
+
+            if is_batch:
+                success_count = sum(1 for r in results.values() if r.get('success'))
+                return {
+                    "success": True,
+                    "results": results,
+                    "summary": {
+                        "total": len(ids),
+                        "successful": success_count,
+                        "failed": len(ids) - success_count,
+                        "level_set": level
+                    }
+                }
+            else:
+                # Single mode - return flat response
+                return results[ids[0]]
+
         except Exception as e:
             return {
                 "success": False,

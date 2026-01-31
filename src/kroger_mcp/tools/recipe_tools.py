@@ -463,20 +463,133 @@ def register_tools(mcp):
 
     @mcp.tool()
     async def link_ingredient_to_product(
-        recipe_id: str = Field(description="Recipe ID"),
-        ingredient_index: int = Field(
-            description="Index of ingredient in recipe (0-based)"
+        recipe_id: Optional[str] = Field(
+            default=None,
+            description="Recipe ID (single mode)"
         ),
-        product_id: str = Field(description="Kroger product ID to link"),
+        ingredient_index: Optional[int] = Field(
+            default=None,
+            description="Index of ingredient in recipe (0-based, single mode)"
+        ),
+        product_id: Optional[str] = Field(
+            default=None,
+            description="Kroger product ID to link (single mode)"
+        ),
+        links: Optional[List[Dict[str, Any]]] = Field(
+            default=None,
+            description=(
+                "List of links for batch mode. Each should have: "
+                "recipe_id, ingredient_index, product_id"
+            )
+        ),
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
-        Link a recipe ingredient to a specific Kroger product.
+        Link recipe ingredient(s) to Kroger products. Supports batch operations.
 
-        This allows future orders to use the product directly without searching.
-        Use this after finding the right product for an ingredient.
+        SINGLE MODE:
+            link_ingredient_to_product(
+                recipe_id="abc123",
+                ingredient_index=0,
+                product_id="0001111041700"
+            )
+
+        BATCH MODE:
+            link_ingredient_to_product(links=[
+                {"recipe_id": "abc123", "ingredient_index": 0, "product_id": "001"},
+                {"recipe_id": "abc123", "ingredient_index": 1, "product_id": "002"}
+            ])
+
+        This allows future orders to use products directly without searching.
         """
         try:
+            # Batch mode: links list provided
+            if links:
+                if len(links) > 50:
+                    return {
+                        "success": False,
+                        "error": "Maximum 50 links per batch request"
+                    }
+
+                data = _load_recipes()
+                results = []
+                updated_recipes = set()
+
+                for link in links:
+                    rid = link.get("recipe_id")
+                    idx = link.get("ingredient_index")
+                    pid = link.get("product_id")
+
+                    if not all([rid, idx is not None, pid]):
+                        results.append({
+                            "success": False,
+                            "error": "Missing required fields",
+                            "link": link
+                        })
+                        continue
+
+                    # Find recipe
+                    recipe = None
+                    for r in data.get("recipes", []):
+                        if r.get("id") == rid:
+                            recipe = r
+                            break
+
+                    if not recipe:
+                        results.append({
+                            "success": False,
+                            "error": f"Recipe '{rid}' not found",
+                            "link": link
+                        })
+                        continue
+
+                    ingredients = recipe.get("ingredients", [])
+                    if idx < 0 or idx >= len(ingredients):
+                        results.append({
+                            "success": False,
+                            "error": f"Invalid ingredient index {idx}",
+                            "link": link
+                        })
+                        continue
+
+                    # Apply the link
+                    ingredients[idx]["product_id"] = pid
+                    updated_recipes.add(rid)
+                    results.append({
+                        "success": True,
+                        "recipe_id": rid,
+                        "ingredient_name": ingredients[idx].get("name"),
+                        "product_id": pid
+                    })
+
+                # Update timestamps for modified recipes
+                for r in data.get("recipes", []):
+                    if r.get("id") in updated_recipes:
+                        r["updated_at"] = datetime.now().isoformat()
+
+                _save_recipes(data)
+
+                success_count = sum(1 for r in results if r.get("success"))
+                return {
+                    "success": True,
+                    "results": results,
+                    "summary": {
+                        "total": len(links),
+                        "successful": success_count,
+                        "failed": len(links) - success_count
+                    }
+                }
+
+            # Single mode: individual parameters
+            if not all([recipe_id, ingredient_index is not None, product_id]):
+                return {
+                    "success": False,
+                    "error": (
+                        "For single mode, provide recipe_id, ingredient_index, "
+                        "and product_id. For batch mode, provide links list."
+                    )
+                }
+
             data = _load_recipes()
 
             for recipe in data.get("recipes", []):

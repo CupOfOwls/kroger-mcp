@@ -199,30 +199,90 @@ def register_tools(mcp):
     @mcp.tool()
     async def assign_meal(
         plan_id: str = Field(description="Plan identifier"),
-        recipe_id: str = Field(description="Recipe to assign"),
-        meal_date: str = Field(description="Date YYYY-MM-DD"),
-        meal_slot: str = Field(
-            description="Meal slot: 'breakfast', 'lunch', 'dinner', or 'snack'"
+        recipe_id: Optional[str] = Field(
+            default=None,
+            description="Recipe to assign (single mode)"
+        ),
+        meal_date: Optional[str] = Field(
+            default=None,
+            description="Date YYYY-MM-DD (single mode)"
+        ),
+        meal_slot: Optional[str] = Field(
+            default=None,
+            description="Meal slot: 'breakfast', 'lunch', 'dinner', 'snack' (single mode)"
         ),
         servings_override: Optional[int] = Field(
             default=None,
             ge=1,
-            description="Override recipe default servings"
+            description="Override recipe default servings (single mode)"
         ),
         notes: Optional[str] = Field(
             default=None,
-            description="Optional notes for this meal"
+            description="Optional notes (single mode)"
+        ),
+        assignments: Optional[List[Dict[str, Any]]] = Field(
+            default=None,
+            description=(
+                "List of assignments for batch mode. Each should have: "
+                "recipe_id, meal_date, meal_slot, and optionally "
+                "servings_override and notes"
+            )
         ),
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
-        Assign a recipe to a specific day and meal slot.
+        Assign recipe(s) to meal slots. Supports single or batch operations.
 
-        Replaces any existing recipe in that slot. The date must be
-        within the plan's date range.
+        SINGLE MODE:
+            assign_meal(
+                plan_id="abc123",
+                recipe_id="recipe1",
+                meal_date="2026-01-27",
+                meal_slot="dinner"
+            )
+
+        BATCH MODE:
+            assign_meal(
+                plan_id="abc123",
+                assignments=[
+                    {"recipe_id": "recipe1", "meal_date": "2026-01-27", "meal_slot": "dinner"},
+                    {"recipe_id": "recipe2", "meal_date": "2026-01-28", "meal_slot": "lunch"}
+                ]
+            )
+
+        Useful for setting up a full week in one call or applying patterns
+        (e.g., same breakfast every day).
 
         Valid meal_slots: breakfast, lunch, dinner, snack
         """
+        # Batch mode: assignments list provided
+        if assignments:
+            if len(assignments) > 100:
+                return {
+                    "success": False,
+                    "error": "Maximum 100 assignments per batch request"
+                }
+
+            result = meal_planning.bulk_assign_meals(
+                plan_id=plan_id,
+                assignments=assignments
+            )
+
+            if ctx and result.get('success'):
+                await ctx.info(f"Assigned {result.get('assigned', 0)} meals")
+
+            return result
+
+        # Single mode: individual parameters
+        if not all([recipe_id, meal_date, meal_slot]):
+            return {
+                "success": False,
+                "error": (
+                    "For single mode, provide recipe_id, meal_date, and meal_slot. "
+                    "For batch mode, provide assignments list."
+                )
+            }
+
         result = meal_planning.assign_meal(
             plan_id=plan_id,
             recipe_id=recipe_id,
@@ -280,35 +340,6 @@ def register_tools(mcp):
             date2=date2,
             slot2=slot2
         )
-
-    @mcp.tool()
-    async def bulk_assign_meals(
-        plan_id: str = Field(description="Plan identifier"),
-        assignments: List[Dict[str, Any]] = Field(
-            description="List of assignments. Each should have: "
-            "recipe_id, meal_date, meal_slot, and optionally "
-            "servings_override and notes"
-        ),
-        ctx: Context = None
-    ) -> Dict[str, Any]:
-        """
-        Assign multiple meals at once.
-
-        Useful for setting up a full week in one call or applying patterns
-        (e.g., same breakfast every day).
-
-        Example assignment:
-        {"recipe_id": "abc123", "meal_date": "2026-01-27", "meal_slot": "dinner"}
-        """
-        result = meal_planning.bulk_assign_meals(
-            plan_id=plan_id,
-            assignments=assignments
-        )
-
-        if ctx and result.get('success'):
-            await ctx.info(f"Assigned {result.get('assigned', 0)} meals")
-
-        return result
 
     # ========== Shopping Integration Tools ==========
 

@@ -6,13 +6,84 @@ integrating with the pantry system for smart reordering.
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from .database import get_db_cursor, ensure_initialized
 
 
 # ========== Helper Functions ==========
+
+
+def _calculate_reorder_status(
+    last_ordered_at: Optional[str],
+    reorder_weeks: Optional[int]
+) -> Dict[str, Any]:
+    """
+    Calculate the reorder status for a list based on schedule.
+
+    Args:
+        last_ordered_at: ISO timestamp of last order, or None
+        reorder_weeks: Number of weeks between reorders, or None/0 for no schedule
+
+    Returns:
+        Dict with reorder status info
+    """
+    if reorder_weeks is None or reorder_weeks == 0:
+        return {"has_schedule": False}
+
+    if last_ordered_at is None:
+        return {
+            "has_schedule": True,
+            "reorder_weeks": reorder_weeks,
+            "last_ordered_at": None,
+            "next_due_date": None,
+            "days_until_due": None,
+            "status": "never_ordered",
+            "is_overdue": True
+        }
+
+    try:
+        last_order = datetime.fromisoformat(last_ordered_at.replace("Z", "+00:00"))
+        # Handle timezone-naive datetimes
+        if last_order.tzinfo is not None:
+            last_order = last_order.replace(tzinfo=None)
+    except (ValueError, AttributeError):
+        # If parsing fails, treat as never ordered
+        return {
+            "has_schedule": True,
+            "reorder_weeks": reorder_weeks,
+            "last_ordered_at": last_ordered_at,
+            "next_due_date": None,
+            "days_until_due": None,
+            "status": "never_ordered",
+            "is_overdue": True
+        }
+
+    next_due = last_order + timedelta(weeks=reorder_weeks)
+    now = datetime.now()
+    days_until_due = (next_due - now).days
+
+    if days_until_due < 0:
+        status = "overdue"
+        is_overdue = True
+    elif days_until_due <= 3:
+        status = "due_soon"
+        is_overdue = False
+    else:
+        status = "on_schedule"
+        is_overdue = False
+
+    return {
+        "has_schedule": True,
+        "reorder_weeks": reorder_weeks,
+        "last_ordered_at": last_ordered_at,
+        "next_due_date": next_due.isoformat(),
+        "days_until_due": days_until_due,
+        "days_overdue": abs(days_until_due) if days_until_due < 0 else 0,
+        "status": status,
+        "is_overdue": is_overdue
+    }
 
 
 def get_all_favorite_product_ids() -> set:
@@ -38,7 +109,8 @@ def get_all_favorite_product_ids() -> set:
 def create_list(
     name: str,
     description: Optional[str] = None,
-    list_type: str = "custom"
+    list_type: str = "custom",
+    reorder_weeks: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Create a new favorite list.
@@ -47,11 +119,20 @@ def create_list(
         name: List name (must be unique)
         description: Optional description
         list_type: Type of list ('custom', 'weekly', 'monthly', 'seasonal')
+        reorder_weeks: Number of weeks between reorders (None = no schedule)
 
     Returns:
         Dict with list_id and success status
     """
     ensure_initialized()
+
+    # Validate reorder_weeks
+    if reorder_weeks is not None:
+        if not isinstance(reorder_weeks, int) or reorder_weeks < 1 or reorder_weeks > 52:
+            return {
+                "success": False,
+                "error": "reorder_weeks must be between 1 and 52"
+            }
 
     # Generate a URL-safe ID from the name
     list_id = f"{name.lower().replace(' ', '-')}-{uuid.uuid4().hex[:8]}"
@@ -60,16 +141,22 @@ def create_list(
         with get_db_cursor() as cursor:
             cursor.execute(
                 """
-                INSERT INTO favorite_lists (id, name, description, list_type)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO favorite_lists (id, name, description, list_type, reorder_weeks)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (list_id, name, description, list_type)
+                (list_id, name, description, list_type, reorder_weeks)
             )
+
+            # Calculate initial reorder status
+            reorder_status = _calculate_reorder_status(None, reorder_weeks)
+
             return {
                 "success": True,
                 "list_id": list_id,
                 "name": name,
-                "list_type": list_type
+                "list_type": list_type,
+                "reorder_weeks": reorder_weeks,
+                "reorder_status": reorder_status
             }
     except Exception as e:
         if "UNIQUE constraint" in str(e):
@@ -82,10 +169,10 @@ def create_list(
 
 def get_lists() -> List[Dict[str, Any]]:
     """
-    Get all favorite lists with item counts.
+    Get all favorite lists with item counts and reorder status.
 
     Returns:
-        List of lists with id, name, description, item_count, etc.
+        List of lists with id, name, description, item_count, reorder_status, etc.
     """
     ensure_initialized()
 
@@ -97,6 +184,8 @@ def get_lists() -> List[Dict[str, Any]]:
                 fl.name,
                 fl.description,
                 fl.list_type,
+                fl.reorder_weeks,
+                fl.last_ordered_at,
                 fl.created_at,
                 fl.updated_at,
                 COUNT(fli.product_id) as item_count
@@ -110,19 +199,28 @@ def get_lists() -> List[Dict[str, Any]]:
         )
         rows = cursor.fetchall()
 
-    return [
-        {
+    results = []
+    for row in rows:
+        reorder_status = _calculate_reorder_status(
+            row["last_ordered_at"],
+            row["reorder_weeks"]
+        )
+
+        results.append({
             "id": row["id"],
             "name": row["name"],
             "description": row["description"],
             "list_type": row["list_type"],
             "item_count": row["item_count"],
+            "reorder_weeks": row["reorder_weeks"],
+            "last_ordered_at": row["last_ordered_at"],
+            "reorder_status": reorder_status,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "is_default": row["id"] == "default"
-        }
-        for row in rows
-    ]
+        })
+
+    return results
 
 
 def get_list(list_id: str) -> Optional[Dict[str, Any]]:
@@ -145,6 +243,8 @@ def get_list(list_id: str) -> Optional[Dict[str, Any]]:
                 fl.name,
                 fl.description,
                 fl.list_type,
+                fl.reorder_weeks,
+                fl.last_ordered_at,
                 fl.created_at,
                 fl.updated_at,
                 COUNT(fli.product_id) as item_count
@@ -160,12 +260,20 @@ def get_list(list_id: str) -> Optional[Dict[str, Any]]:
     if not row:
         return None
 
+    reorder_status = _calculate_reorder_status(
+        row["last_ordered_at"],
+        row["reorder_weeks"]
+    )
+
     return {
         "id": row["id"],
         "name": row["name"],
         "description": row["description"],
         "list_type": row["list_type"],
         "item_count": row["item_count"],
+        "reorder_weeks": row["reorder_weeks"],
+        "last_ordered_at": row["last_ordered_at"],
+        "reorder_status": reorder_status,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "is_default": row["id"] == "default"
@@ -851,4 +959,133 @@ def suggest_for_list(
         "suggestions": suggestions,
         "count": len(suggestions),
         "excluded_list": list_id
+    }
+
+
+# ========== Reorder Schedule Management ==========
+
+
+def update_list_schedule(
+    list_id: str,
+    reorder_weeks: Optional[int]
+) -> Dict[str, Any]:
+    """
+    Update the reorder schedule for an existing list.
+
+    Args:
+        list_id: The list ID
+        reorder_weeks: Number of weeks between reorders (1-52), or None to disable
+
+    Returns:
+        Success status with updated reorder info
+    """
+    ensure_initialized()
+
+    if list_id == "default":
+        return {
+            "success": False,
+            "error": "Cannot modify schedule for the default list"
+        }
+
+    # Validate reorder_weeks
+    if reorder_weeks is not None:
+        if not isinstance(reorder_weeks, int) or reorder_weeks < 1 or reorder_weeks > 52:
+            return {
+                "success": False,
+                "error": "reorder_weeks must be between 1 and 52, or None to disable"
+            }
+
+    with get_db_cursor() as cursor:
+        # Check if list exists and get current last_ordered_at
+        cursor.execute(
+            "SELECT last_ordered_at FROM favorite_lists WHERE id = ?",
+            (list_id,)
+        )
+        row = cursor.fetchone()
+
+        if not row:
+            return {
+                "success": False,
+                "error": f"List '{list_id}' not found"
+            }
+
+        last_ordered_at = row["last_ordered_at"]
+
+        # Update the schedule
+        cursor.execute(
+            """
+            UPDATE favorite_lists
+            SET reorder_weeks = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (reorder_weeks, datetime.now().isoformat(), list_id)
+        )
+
+    # Calculate new reorder status
+    reorder_status = _calculate_reorder_status(last_ordered_at, reorder_weeks)
+
+    return {
+        "success": True,
+        "list_id": list_id,
+        "reorder_weeks": reorder_weeks,
+        "reorder_status": reorder_status
+    }
+
+
+def mark_list_ordered(list_id: str) -> Dict[str, Any]:
+    """
+    Mark a list as ordered, updating the last_ordered_at timestamp.
+
+    This should be called after successfully ordering items from a list.
+
+    Args:
+        list_id: The list ID
+
+    Returns:
+        Success status with reorder info
+    """
+    ensure_initialized()
+
+    now = datetime.now().isoformat()
+
+    with get_db_cursor() as cursor:
+        # Get current reorder_weeks
+        cursor.execute(
+            "SELECT reorder_weeks, last_ordered_at FROM favorite_lists WHERE id = ?",
+            (list_id,)
+        )
+        row = cursor.fetchone()
+
+        if not row:
+            return {
+                "success": False,
+                "error": f"List '{list_id}' not found"
+            }
+
+        reorder_weeks = row["reorder_weeks"]
+        previous_ordered_at = row["last_ordered_at"]
+
+        # Calculate if it was overdue before marking
+        previous_status = _calculate_reorder_status(previous_ordered_at, reorder_weeks)
+        was_overdue = previous_status.get("is_overdue", False)
+
+        # Update last_ordered_at
+        cursor.execute(
+            """
+            UPDATE favorite_lists
+            SET last_ordered_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (now, now, list_id)
+        )
+
+    # Calculate new reorder status
+    new_status = _calculate_reorder_status(now, reorder_weeks)
+
+    return {
+        "success": True,
+        "list_id": list_id,
+        "ordered_at": now,
+        "was_overdue": was_overdue,
+        "reorder_status": new_status
     }

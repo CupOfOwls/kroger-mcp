@@ -163,7 +163,7 @@ When asked to create a recipe or meal plan:
 ### Step 4: Add to Cart
 - Confirm quantities based on recipe needs
 - Ask user preference: PICKUP or DELIVERY
-- Use bulk_add_to_cart for efficiency
+- Use add_to_cart with a list for efficiency
 - Confirm all items were added successfully
 
 ### Step 5: Save the Recipe (Optional)
@@ -267,6 +267,29 @@ Items are auto-categorized, but you can override:
 - **treat**: Holiday/seasonal items (turkey, candy corn)
 
 Use `categorize_item` to manually adjust categories.
+
+### Batch Product Search
+Use `search_products` with a list for efficient multi-term searches:
+
+```
+# Less efficient - 5 separate tool calls
+search_products(search_term="milk")
+search_products(search_term="bread")
+search_products(search_term="eggs")
+
+# More efficient - 1 tool call with parallel execution
+search_products(search_term=["milk", "bread", "eggs", "butter", "cheese"])
+```
+
+Benefits:
+- **Fewer tokens**: 1 call vs 5 calls saves ~80% token overhead
+- **Faster**: Searches execute in parallel
+- **Organized**: Results grouped by search term
+
+Parameters:
+- `search_term`: Single term (string) or list of up to 10 terms
+- `limit`: Results per term (default 10, max 50)
+- `prioritize_favorites`: Boost favorites to top (default true)
 
 ---
 
@@ -376,14 +399,15 @@ Since Kroger's Public API doesn't support shopping lists, this system provides *
 
 | Tool | Purpose |
 |------|---------|
-| `create_favorite_list` | Create a new named list |
-| `get_favorite_lists` | View all lists with item counts |
+| `create_favorite_list` | Create a new named list (with optional reorder schedule) |
+| `get_favorite_lists` | View all lists with item counts and reorder status |
 | `rename_favorite_list` | Rename or update description |
 | `delete_favorite_list` | Delete a list (cannot delete default) |
 | `add_to_favorite_list` | Add product(s) to a list (single or bulk) |
 | `remove_from_favorite_list` | Remove product from list |
 | `get_favorite_list_items` | View items with pantry status |
-| `order_favorite_list` | Order list items to cart |
+| `order_favorite_list` | Order list items to cart (shows if overdue) |
+| `update_list_schedule` | Set or update reorder schedule for a list |
 | `suggest_favorites` | Get suggestions from purchase history |
 
 ### Example List Workflow
@@ -394,8 +418,7 @@ User: "Create a weekly staples list"
 → Returns: list_id="weekly-staples-abc123"
 
 User: "Add organic milk and eggs to my weekly staples"
-→ search_products("organic milk") → get product_id_1
-→ search_products("eggs") → get product_id_2
+→ search_products(search_term=["organic milk", "eggs"]) → get product_ids
 → add_to_favorite_list(
     list_id="weekly-staples-abc123",
     items=[
@@ -407,6 +430,65 @@ User: "Add organic milk and eggs to my weekly staples"
 User: "Order my weekly staples"
 → order_favorite_list(list_id="weekly-staples-abc123", skip_if_stocked=True)
 → Shows: "Added 5 items, skipped 3 (well-stocked in pantry)"
+```
+
+### Reorder Schedules
+
+Set a recurring schedule on lists to get reminders when they're due for reorder. When you order a list, it shows if it was overdue.
+
+**Create a list with a schedule:**
+```
+create_favorite_list(
+    name="Weekly Groceries",
+    list_type="weekly",
+    reorder_weeks=2  # Reorder every 2 weeks
+)
+```
+
+**Common schedules:**
+- `reorder_weeks=1` - Weekly (every week)
+- `reorder_weeks=2` - Bi-weekly (every 2 weeks)
+- `reorder_weeks=4` - Monthly (every 4 weeks)
+- `reorder_weeks=None` - No schedule (default)
+
+**View reorder status:**
+```
+get_favorite_lists() returns:
+[
+  {
+    "name": "Weekly Groceries",
+    "reorder_status": {
+      "has_schedule": true,
+      "reorder_weeks": 2,
+      "status": "overdue",  // or "due_soon", "on_schedule", "never_ordered"
+      "is_overdue": true,
+      "days_until_due": -3,
+      "next_due_date": "2026-02-10"
+    }
+  }
+]
+```
+
+**Reorder status values:**
+- **never_ordered**: List has schedule but hasn't been ordered yet (is_overdue=true)
+- **overdue**: Past the due date (is_overdue=true)
+- **due_soon**: Within 3 days of due date (is_overdue=false)
+- **on_schedule**: Not yet due (is_overdue=false)
+
+**When ordering shows overdue status:**
+```
+order_favorite_list(list_id="weekly-groceries-abc123")
+→ Shows: "Added 8 items, skipped 2 (This list was OVERDUE for reorder)"
+→ Response includes: reorder_status.was_overdue=true, next_due="2026-02-13"
+```
+
+**Update schedule on existing list:**
+```
+update_list_schedule(list_id="weekly-groceries-abc123", reorder_weeks=1)
+→ Changes from 2-week to 1-week schedule
+
+update_list_schedule(list_id="weekly-groceries-abc123", reorder_weeks=None)
+→ Disables the schedule entirely
 ```
 
 ### Smart Ordering with Pantry Integration
@@ -437,7 +519,7 @@ For efficiency, add multiple items at once using the `items` parameter:
 
 ```
 User: "Add milk, eggs, and bread to my weekly staples"
-→ search_products for each item to get product_ids
+→ search_products(search_term=["milk", "eggs", "bread"]) → get all product_ids in one call
 → add_to_favorite_list(
     list_id="weekly-staples-abc123",
     items=[
@@ -458,6 +540,271 @@ User: "Add milk, eggs, and bread to my weekly staples"
 - `notes` (optional): Notes about the item
 
 **Bulk add handles duplicates gracefully** - items already in the list are reported as failed without blocking others.
+
+---
+
+## Meal Planning
+
+Plan your weekly or monthly meals by assigning saved recipes to specific days and meal slots. Generate consolidated shopping lists and add ingredients to cart with pantry-aware skipping.
+
+### How It Works
+
+1. **Create a meal plan**: Define a date range (weekly, monthly, or custom)
+2. **Assign recipes**: Add saved recipes to breakfast, lunch, dinner, or snack slots
+3. **Preview shopping**: See all ingredients needed, with pantry levels checked
+4. **Order ingredients**: Add to cart with confirmation workflow, skipping items you have
+
+### Meal Plan CRUD Tools
+
+| Tool | Purpose |
+|------|---------|
+| `create_meal_plan` | Create a new meal plan for a date range |
+| `get_meal_plans` | List all meal plans with summary info |
+| `get_meal_plan` | Get full details of a specific plan |
+| `update_meal_plan` | Update plan name, description, or dates |
+| `delete_meal_plan` | Delete a plan and all its meal entries |
+| `copy_meal_plan` | Copy a plan to a new date range |
+
+### Meal Assignment Tools
+
+| Tool | Purpose |
+|------|---------|
+| `assign_meal` | Assign recipe(s) to day/slot (single or batch) |
+| `remove_meal` | Remove a recipe from a meal slot |
+| `swap_meals` | Swap two meal assignments |
+
+### Shopping Integration Tools
+
+| Tool | Purpose |
+|------|---------|
+| `preview_meal_plan_shopping` | Preview shopping list for meal plan(s) |
+| `add_meal_plan_to_cart` | Add ingredients to cart with confirmation workflow |
+
+### Utility Tools
+
+| Tool | Purpose |
+|------|---------|
+| `get_week_view` | Calendar-style view of meals for a week |
+| `get_meal_plan_summary` | Summary statistics for a meal plan |
+
+### Creating a Meal Plan
+
+```
+User: "Help me plan next week's meals"
+
+1. Create the plan:
+   create_meal_plan(
+       name="Week of Feb 3",
+       start_date="2026-02-03",
+       plan_type="weekly"
+   )
+   → Returns: plan_id="abc12345"
+
+2. Assign recipes to days:
+   assign_meal(
+       plan_id="abc12345",
+       recipe_id="carbonara-xyz",
+       meal_date="2026-02-03",
+       meal_slot="dinner"
+   )
+```
+
+### Bulk Assigning Meals
+
+Set up a full week at once using `assign_meal` with an assignments list:
+
+```
+assign_meal(
+    plan_id="abc12345",
+    assignments=[
+        {"recipe_id": "oatmeal-123", "meal_date": "2026-02-03", "meal_slot": "breakfast"},
+        {"recipe_id": "oatmeal-123", "meal_date": "2026-02-04", "meal_slot": "breakfast"},
+        {"recipe_id": "salad-456", "meal_date": "2026-02-03", "meal_slot": "lunch"},
+        {"recipe_id": "carbonara-xyz", "meal_date": "2026-02-03", "meal_slot": "dinner"}
+    ]
+)
+```
+
+### Meal Slots
+
+Four slots available per day:
+- **breakfast**: Morning meal
+- **lunch**: Midday meal
+- **dinner**: Evening meal
+- **snack**: Any time snacks
+
+### Plan Types
+
+- **weekly**: 7-day plan (default)
+- **monthly**: ~30-day plan
+- **custom**: Any date range you specify
+
+### Templates
+
+Save meal plans as templates for reuse:
+
+```
+# Create a template
+create_meal_plan(
+    name="My Healthy Week Template",
+    start_date="2026-01-01",  # Dates don't matter for templates
+    is_template=True
+)
+
+# List templates
+get_meal_plans(include_templates=True)
+
+# Copy template to actual dates
+copy_meal_plan(
+    source_plan_id="template-123",
+    new_name="Week of Feb 10",
+    new_start_date="2026-02-10"
+)
+```
+
+### Shopping for a Meal Plan
+
+**Step 1: Preview (confirm=False)**
+```
+add_meal_plan_to_cart(
+    plan_id="abc12345",
+    confirm=False  # Preview only, doesn't add to cart
+)
+```
+
+Returns:
+```
+Preview: Week of Feb 3 (7 days, 12 meals)
+
+WILL ADD:
+✓ Guanciale (8 oz) - $12.99 - Pantry: 0%
+✓ Spaghetti (1 lb) - $2.49 - Not tracked
+✓ Chicken Breast (2 lb) - $8.99 - Pantry: 15%
+
+WILL SKIP:
+✗ Eggs (4 large) - Pantry: 65%
+✗ Olive Oil - Pantry: 80%
+
+UNKNOWN (need product linking):
+? Fresh Basil - search needed
+
+Total: $24.47 for 3 items
+```
+
+**Step 2: Execute (confirm=True)**
+```
+add_meal_plan_to_cart(
+    plan_id="abc12345",
+    skip_items=["chicken"],  # Skip additional items
+    modality="PICKUP",
+    confirm=True  # Actually add to cart
+)
+```
+
+### Shopping by Date Range
+
+Shop for meals across multiple plans:
+
+```
+# Next 7 days
+add_meal_plan_to_cart(days_ahead=7, confirm=False)
+
+# Specific date range
+add_meal_plan_to_cart(
+    start_date="2026-02-03",
+    end_date="2026-02-09",
+    confirm=False
+)
+```
+
+### Pantry-Aware Shopping
+
+The system automatically:
+- **Skips items** with pantry level above threshold (default 30%)
+- **Flags low items** for ordering (below threshold)
+- **Combines duplicates** from multiple recipes
+- **Identifies unknowns** that need product linking
+
+Adjust the threshold:
+```
+add_meal_plan_to_cart(
+    plan_id="abc12345",
+    pantry_threshold=20,  # More aggressive - only skip if >20%
+    confirm=False
+)
+```
+
+### Week View
+
+Get a calendar-style overview:
+
+```
+get_week_view(start_date="2026-02-03")
+
+Returns:
+Monday (Feb 3):
+  Breakfast: Overnight Oats
+  Lunch: Greek Salad
+  Dinner: Carbonara
+  Snack: —
+
+Tuesday (Feb 4):
+  Breakfast: Overnight Oats
+  Lunch: —
+  Dinner: Grilled Chicken
+  Snack: Hummus & Veggies
+...
+```
+
+### Meal Plan Summary
+
+Get statistics and readiness check:
+
+```
+get_meal_plan_summary(plan_id="abc12345")
+
+Returns:
+Plan: Week of Feb 3
+Date Range: Feb 3 - Feb 9 (7 days)
+
+Meal Counts:
+  Total: 18 meals
+  Breakfast: 7, Lunch: 5, Dinner: 6, Snack: 0
+
+Recipes Used: 8 unique
+  - Overnight Oats (7x)
+  - Carbonara (2x)
+  ...
+
+Coverage: 64.3% (18/28 slots filled)
+
+Pantry Readiness:
+  Items to order: 12
+  Items available: 8
+  Items need linking: 3
+```
+
+### Complete Meal Planning Workflow
+
+```
+User: "Help me set up next week's meals"
+
+1. Use get_recipes to show saved recipes
+2. Create meal plan with create_meal_plan
+3. Discuss meal preferences with user
+4. Assign meals with bulk_assign_meals
+5. Show week view with get_week_view
+6. Ask if user wants to shop now
+
+User: "Order the ingredients"
+
+1. Preview with add_meal_plan_to_cart(confirm=False)
+2. Show items that will be added vs skipped
+3. Ask about PICKUP/DELIVERY preference
+4. Get explicit confirmation
+5. Execute with add_meal_plan_to_cart(confirm=True)
+6. Remind to review cart in Kroger app
+```
 
 ---
 
@@ -655,16 +1002,16 @@ add_recipe_to_cart_with_confirmation(
 
 ### Bulk Cart Operations
 
-For bulk adds, use the `preview_only` parameter:
+For bulk adds, use the `preview_only` parameter with `add_to_cart`:
 
 ```
 # Step 1: Preview
-bulk_add_to_cart(items=[...], preview_only=True)
+add_to_cart(items=[...], preview_only=True)
 
 # Show preview, get confirmation
 
 # Step 2: Execute
-bulk_add_to_cart(items=[...], preview_only=False)
+add_to_cart(items=[...], preview_only=False)
 ```
 
 ---
@@ -685,10 +1032,10 @@ After shopping is complete:
 ### Shopping & Cart
 | Tool | Use For |
 |------|---------|
-| `search_products` | Find ingredients at Kroger |
+| `search_products` | Find ingredient(s) at Kroger (single or batch) |
+| `get_product_details` | Get details for product(s) by ID (single or batch) |
 | `get_shopping_context` | Check pantry/favorites before adding to cart |
-| `add_items_to_cart` | Add single item (with confirmation guidance) |
-| `bulk_add_to_cart` | Add multiple items (use preview_only=True first) |
+| `add_to_cart` | Add item(s) to cart (single or batch, use preview_only=True first) |
 | `view_current_cart` | See what's in cart |
 | `mark_order_placed` | Record completed order |
 
@@ -697,7 +1044,7 @@ After shopping is complete:
 |------|---------|
 | `get_purchase_predictions` | What you'll need soon |
 | `get_shopping_suggestions` | Smart shopping list |
-| `get_item_statistics` | Product purchase patterns |
+| `get_item_statistics` | Product purchase patterns (single or batch) |
 | `categorize_item` | Change item category |
 | `get_seasonal_items` | Upcoming holiday items |
 
@@ -709,14 +1056,14 @@ After shopping is complete:
 | `search_recipes` | Find recipe by name/tag |
 | `preview_recipe_order` | Preview with skip options |
 | `add_recipe_to_cart_with_confirmation` | Order with 2-step confirmation workflow |
-| `link_ingredient_to_product` | Link to Kroger product |
+| `link_ingredient_to_product` | Link ingredient(s) to Kroger product (single or batch) |
 
 ### Pantry Tracking
 | Tool | Use For |
 |------|---------|
 | `get_pantry` | View all pantry items with levels |
 | `update_pantry_item` | Manually set level (0-100%) |
-| `restock_pantry_item` | Mark item as restocked |
+| `restock_pantry_item` | Mark item(s) as restocked (single or batch) |
 | `get_low_inventory` | Get items running low |
 | `add_to_pantry` | Start tracking an item |
 | `remove_from_pantry` | Stop tracking an item |
@@ -733,13 +1080,31 @@ After shopping is complete:
 ### Favorite Lists
 | Tool | Use For |
 |------|---------|
-| `create_favorite_list` | Create named list (Weekly Staples, etc.) |
-| `get_favorite_lists` | View all lists with item counts |
+| `create_favorite_list` | Create named list with optional reorder schedule |
+| `get_favorite_lists` | View all lists with item counts and reorder status |
 | `add_to_favorite_list` | Add product(s) to a list (single or bulk) |
 | `remove_from_favorite_list` | Remove product from list |
 | `get_favorite_list_items` | View items with pantry levels |
-| `order_favorite_list` | Order list items (skip well-stocked) |
+| `order_favorite_list` | Order list items (shows if overdue) |
+| `update_list_schedule` | Set/update reorder schedule (1-52 weeks) |
 | `suggest_favorites` | Get suggestions from purchase history |
+
+### Meal Planning
+| Tool | Use For |
+|------|---------|
+| `create_meal_plan` | Create weekly/monthly meal plan |
+| `get_meal_plans` | List all meal plans |
+| `get_meal_plan` | Get full plan details |
+| `update_meal_plan` | Update plan name/dates |
+| `delete_meal_plan` | Delete a meal plan |
+| `copy_meal_plan` | Copy plan to new dates |
+| `assign_meal` | Assign recipe(s) to day/slot (single or batch) |
+| `remove_meal` | Remove recipe from slot |
+| `swap_meals` | Swap two meal assignments |
+| `preview_meal_plan_shopping` | Preview shopping list for plan |
+| `add_meal_plan_to_cart` | Order plan ingredients (2-step confirmation) |
+| `get_week_view` | Calendar view of weekly meals |
+| `get_meal_plan_summary` | Plan statistics and readiness |
 
 ### Configuration
 | Tool | Use For |

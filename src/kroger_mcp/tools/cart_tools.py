@@ -252,149 +252,88 @@ def register_tools(mcp):
     # ========== Cart Management Tools ==========
 
     @mcp.tool()
-    async def add_items_to_cart(
-        product_id: str,
-        quantity: int = 1,
-        modality: str = "PICKUP",
-        ctx: Context = None
-    ) -> Dict[str, Any]:
-        """
-        Add a single item to the user's Kroger cart and track it locally.
-
-        IMPORTANT - CONFIRMATION WORKFLOW:
-        Before calling this tool, the client SHOULD:
-        1. Call get_shopping_context() to check pantry levels
-        2. Show user if they already have this item (pantry status)
-        3. Ask for confirmation: "Add [item] to cart?"
-        4. Confirm modality preference (PICKUP/DELIVERY)
-
-        After calling this tool:
-        - Show what was added
-        - Remind user to review cart in Kroger app before checkout
-
-        Args:
-            product_id: The product ID or UPC to add to cart
-            quantity: Quantity to add (default: 1)
-            modality: Fulfillment method - PICKUP or DELIVERY
-
-        Returns:
-            Dictionary confirming the item was added to cart
-        """
-        try:
-            if ctx:
-                await ctx.info(f"Adding {quantity}x {product_id} to cart with {modality} modality")
-            
-            # Get authenticated client
-            client = get_authenticated_client()
-            
-            # Format the item for the API
-            cart_item = {
-                "upc": product_id,
-                "quantity": quantity,
-                "modality": modality
-            }
-            
-            if ctx:
-                await ctx.info(f"Calling Kroger API to add item: {cart_item}")
-            
-            # Add the item to the actual Kroger cart
-            # Note: add_to_cart returns None on success, raises exception on failure
-            client.cart.add_to_cart([cart_item])
-            
-            if ctx:
-                await ctx.info("Successfully added item to Kroger cart")
-            
-            # Add to local cart tracking
-            _add_item_to_local_cart(product_id, quantity, modality)
-            
-            if ctx:
-                await ctx.info("Item added to local cart tracking")
-            
-            return {
-                "success": True,
-                "message": f"Successfully added {quantity}x {product_id} to cart",
-                "product_id": product_id,
-                "quantity": quantity,
-                "modality": modality,
-                "timestamp": datetime.now().isoformat()
-            }
-            
-        except Exception as e:
-            if ctx:
-                await ctx.error(f"Failed to add item to cart: {str(e)}")
-            
-            # Provide helpful error message for authentication issues
-            error_message = str(e)
-            if "401" in error_message or "Unauthorized" in error_message:
-                return {
-                    "success": False,
-                    "error": "Authentication failed. Please run force_reauthenticate and try again.",
-                    "details": error_message
-                }
-            elif "400" in error_message or "Bad Request" in error_message:
-                return {
-                    "success": False,
-                    "error": "Invalid request. Please check the product ID and try again.",
-                    "details": error_message
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": f"Failed to add item to cart: {error_message}",
-                    "product_id": product_id,
-                    "quantity": quantity,
-                    "modality": modality
-                }
-
-    @mcp.tool()
-    async def bulk_add_to_cart(
-        items: List[Dict[str, Any]],
+    async def add_to_cart(
+        items: str | List[Dict[str, Any]] = Field(
+            description=(
+                "Product ID (string) for single item, or list of item dicts for batch. "
+                "Each dict: {product_id, quantity?, modality?, description?}"
+            )
+        ),
+        quantity: int = Field(
+            default=1,
+            ge=1,
+            le=99,
+            description="Quantity (only used when items is a single product ID string)"
+        ),
+        modality: str = Field(
+            default="PICKUP",
+            description="PICKUP or DELIVERY (only used when items is a single product ID string)"
+        ),
         preview_only: bool = Field(
             default=False,
-            description="If True, returns preview without adding to cart"
+            description="If True, returns preview without adding to cart (batch mode)"
         ),
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
-        Add multiple items to the user's Kroger cart in a single operation.
+        Add items to the user's Kroger cart. Supports single or batch operations.
 
-        CONFIRMATION WORKFLOW (2-step process):
+        SINGLE MODE (items is a string):
+            add_to_cart(items="0001111041700", quantity=2, modality="PICKUP")
+
+        BATCH MODE (items is a list):
+            add_to_cart(items=[
+                {"product_id": "0001111041700", "quantity": 2},
+                {"product_id": "0001111089476", "quantity": 1, "modality": "DELIVERY"}
+            ])
+
+        CONFIRMATION WORKFLOW (recommended for batch):
         Step 1: Call with preview_only=True
-            - Returns what WOULD be added without modifying cart
-            - Includes pantry context for each item
+            - Returns what WOULD be added with pantry context
             - DOES NOT add anything to cart
 
-        Step 2: Call with preview_only=False (default) after user approval
+        Step 2: Call with preview_only=False after user approval
             - Actually adds items to cart
-            - Returns confirmation summary
-
-        The client SHOULD show the preview to user and get explicit
-        confirmation before calling with preview_only=False.
 
         Args:
-            items: List of items to add. Each item should have:
-                   - product_id: The product ID or UPC
-                   - quantity: Quantity to add (default: 1)
-                   - modality: PICKUP or DELIVERY (default: PICKUP)
+            items: Product ID string OR list of item dicts
+            quantity: Quantity for single mode (default: 1)
+            modality: Fulfillment method for single mode - PICKUP or DELIVERY
             preview_only: If True, returns preview without modifying cart
 
         Returns:
-            Dictionary with preview (if preview_only) or confirmation
+            Dictionary confirming item(s) added or preview
         """
         try:
-            # Build item list with details
-            formatted_items = []
-            for item in items:
-                formatted_items.append({
-                    "product_id": item["product_id"],
-                    "quantity": item.get("quantity", 1),
-                    "modality": item.get("modality", "PICKUP"),
-                    "description": item.get("description")
-                })
+            # Normalize input to list of item dicts
+            if isinstance(items, str):
+                # Single mode: items is a product_id string
+                is_batch = False
+                formatted_items = [{
+                    "product_id": items,
+                    "quantity": quantity,
+                    "modality": modality,
+                    "description": None
+                }]
+            else:
+                # Batch mode: items is a list of dicts
+                is_batch = True
+                if len(items) > 50:
+                    return {
+                        "success": False,
+                        "error": "Maximum 50 items per batch request"
+                    }
+                formatted_items = []
+                for item in items:
+                    formatted_items.append({
+                        "product_id": item["product_id"],
+                        "quantity": item.get("quantity", 1),
+                        "modality": item.get("modality", "PICKUP"),
+                        "description": item.get("description")
+                    })
 
             # Preview mode - return what would be added with pantry context
             if preview_only:
-                # Get pantry context for these items
                 product_ids = [item["product_id"] for item in formatted_items]
 
                 pantry_context = {}
@@ -411,7 +350,6 @@ def register_tools(mcp):
                 except Exception:
                     pass  # Pantry check is optional
 
-                # Build preview with recommendations
                 preview_items = []
                 skip_suggestions = []
                 for item in formatted_items:
@@ -441,39 +379,40 @@ def register_tools(mcp):
                     "items": preview_items,
                     "summary": {
                         "total_items": len(preview_items),
-                        "items_to_add": len([i for i in preview_items if i["recommendation"] == "ADD"]),
+                        "items_to_add": len(
+                            [i for i in preview_items if i["recommendation"] == "ADD"]
+                        ),
                         "items_to_skip": len(skip_suggestions)
                     },
                     "skip_suggestions": skip_suggestions,
-                    "next_step": "Review items and call again with preview_only=False to add to cart"
+                    "next_step": "Review and call again with preview_only=False to add"
                 }
 
             # Actual add mode
             if ctx:
-                await ctx.info(f"Adding {len(items)} items to cart in bulk")
+                await ctx.info(f"Adding {len(formatted_items)} item(s) to cart")
 
             client = get_authenticated_client()
 
-            # Format items for the API
+            # Format items for the Kroger API
             cart_items = []
             for item in formatted_items:
-                cart_item = {
+                cart_items.append({
                     "upc": item["product_id"],
                     "quantity": item["quantity"],
                     "modality": item["modality"]
-                }
-                cart_items.append(cart_item)
+                })
 
             if ctx:
-                await ctx.info(f"Calling Kroger API to add {len(cart_items)} items")
+                await ctx.info(f"Calling Kroger API to add {len(cart_items)} item(s)")
 
-            # Add all items to the actual Kroger cart
+            # Add to actual Kroger cart
             client.cart.add_to_cart(cart_items)
 
             if ctx:
-                await ctx.info("Successfully added all items to Kroger cart")
+                await ctx.info("Successfully added item(s) to Kroger cart")
 
-            # Add all items to local cart tracking
+            # Add to local cart tracking
             for item in formatted_items:
                 _add_item_to_local_cart(
                     item["product_id"],
@@ -482,20 +421,33 @@ def register_tools(mcp):
                 )
 
             if ctx:
-                await ctx.info("All items added to local cart tracking")
+                await ctx.info("Item(s) added to local cart tracking")
 
-            return {
-                "success": True,
-                "message": f"Successfully added {len(items)} items to cart",
-                "items_added": len(items),
-                "items": formatted_items,
-                "timestamp": datetime.now().isoformat(),
-                "reminder": "Review your cart in the Kroger app before checkout"
-            }
+            # Return format differs for single vs batch
+            if is_batch:
+                return {
+                    "success": True,
+                    "message": f"Successfully added {len(formatted_items)} items to cart",
+                    "items_added": len(formatted_items),
+                    "items": formatted_items,
+                    "timestamp": datetime.now().isoformat(),
+                    "reminder": "Review your cart in the Kroger app before checkout"
+                }
+            else:
+                # Single item - return flat response for backwards compatibility
+                item = formatted_items[0]
+                return {
+                    "success": True,
+                    "message": f"Successfully added {item['quantity']}x {item['product_id']} to cart",
+                    "product_id": item["product_id"],
+                    "quantity": item["quantity"],
+                    "modality": item["modality"],
+                    "timestamp": datetime.now().isoformat()
+                }
 
         except Exception as e:
             if ctx:
-                await ctx.error(f"Failed to bulk add items to cart: {str(e)}")
+                await ctx.error(f"Failed to add item(s) to cart: {str(e)}")
 
             error_message = str(e)
             if "401" in error_message or "Unauthorized" in error_message:
@@ -504,11 +456,17 @@ def register_tools(mcp):
                     "error": "Authentication failed. Please run force_reauthenticate and try again.",
                     "details": error_message
                 }
+            elif "400" in error_message or "Bad Request" in error_message:
+                return {
+                    "success": False,
+                    "error": "Invalid request. Please check the product ID(s) and try again.",
+                    "details": error_message
+                }
             else:
                 return {
                     "success": False,
-                    "error": f"Failed to add items to cart: {error_message}",
-                    "items_attempted": len(items)
+                    "error": f"Failed to add item(s) to cart: {error_message}",
+                    "items_attempted": len(formatted_items) if 'formatted_items' in locals() else 1
                 }
 
     @mcp.tool()
