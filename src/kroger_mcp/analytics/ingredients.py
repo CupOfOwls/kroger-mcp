@@ -109,27 +109,57 @@ BAD_INGREDIENTS: List[IngredientInfo] = [
         category="sweetener",
     ),
 
-    # MSG and hidden MSG
-    IngredientInfo(
-        key="msg",
-        name="MSG (Monosodium Glutamate)",
-        aliases=["monosodium glutamate", "E621", "glutamate"],
-        severity=Severity.CRITICAL,
-        reason="Excitotoxin, headaches, neurological concerns",
-        category="flavor_enhancer",
-        exclude_patterns=["no msg", "msg free", "without msg"],
-    ),
+    # Hydrolyzed protein (contains free glutamate)
     IngredientInfo(
         key="hydrolyzed_protein",
         name="Hydrolyzed Protein",
         aliases=[
             "hydrolyzed vegetable protein", "HVP",
             "hydrolyzed soy protein", "hydrolyzed plant protein",
-            "hydrolyzed yeast", "protein hydrolysate"
+            "hydrolyzed yeast", "protein hydrolysate",
+            "hydrolyzed wheat protein", "hydrolyzed corn protein"
         ],
         severity=Severity.CRITICAL,
-        reason="Contains hidden MSG, excitotoxin",
+        reason="Contains free glutamate, excitotoxin, headaches",
         category="flavor_enhancer",
+    ),
+
+    # Sulfites
+    IngredientInfo(
+        key="sulfites",
+        name="Sulfites",
+        aliases=[
+            "sodium sulfite", "sodium bisulfite", "sodium metabisulfite",
+            "potassium bisulfite", "potassium metabisulfite", "sulfur dioxide",
+            "E220", "E221", "E222", "E223", "E224", "E225", "E226", "E227", "E228"
+        ],
+        severity=Severity.CRITICAL,
+        reason="Severe allergic reactions, asthma trigger, banned on fresh produce",
+        category="preservative",
+    ),
+    IngredientInfo(
+        key="propyl_gallate",
+        name="Propyl Gallate",
+        aliases=["E310", "propyl 3,4,5-trihydroxybenzoate"],
+        severity=Severity.CRITICAL,
+        reason="Potential carcinogen, endocrine disruptor",
+        category="preservative",
+    ),
+    IngredientInfo(
+        key="interesterified_fat",
+        name="Interesterified Fat",
+        aliases=["interesterified oil", "interesterified vegetable oil"],
+        severity=Severity.CRITICAL,
+        reason="May raise blood sugar, heart disease concerns",
+        category="fat",
+    ),
+    IngredientInfo(
+        key="olestra",
+        name="Olestra",
+        aliases=["olean"],
+        severity=Severity.CRITICAL,
+        reason="Causes digestive issues, blocks vitamin absorption",
+        category="fat_substitute",
     ),
 
     # ==================== WARNING SEVERITY ====================
@@ -180,6 +210,30 @@ BAD_INGREDIENTS: List[IngredientInfo] = [
         aliases=["indigo carmine", "FD&C blue 2", "E132", "blue dye 2", "blue #2"],
         severity=Severity.WARNING,
         reason="Brain tumors in animals",
+        category="artificial_color",
+    ),
+    IngredientInfo(
+        key="green_3",
+        name="Green 3 (Fast Green)",
+        aliases=["fast green", "FD&C green 3", "E143", "green dye 3", "green #3"],
+        severity=Severity.WARNING,
+        reason="Bladder tumors in animals",
+        category="artificial_color",
+    ),
+    IngredientInfo(
+        key="citrus_red_2",
+        name="Citrus Red 2",
+        aliases=["E121", "citrus red no. 2"],
+        severity=Severity.WARNING,
+        reason="Potential carcinogen, only allowed on orange peels",
+        category="artificial_color",
+    ),
+    IngredientInfo(
+        key="orange_b",
+        name="Orange B",
+        aliases=["FD&C orange B"],
+        severity=Severity.WARNING,
+        reason="Limited use approved, potential carcinogen",
         category="artificial_color",
     ),
 
@@ -279,6 +333,111 @@ BAD_INGREDIENTS: List[IngredientInfo] = [
         category="flavoring",
     ),
 
+    # Aluminum compounds
+    IngredientInfo(
+        key="sodium_aluminum_phosphate",
+        name="Sodium Aluminum Phosphate",
+        aliases=["SALP", "E541", "aluminum phosphate"],
+        severity=Severity.WARNING,
+        reason="Aluminum accumulation concerns, neurotoxicity",
+        category="leavening_agent",
+    ),
+    IngredientInfo(
+        key="sodium_aluminum_sulfate",
+        name="Sodium Aluminum Sulfate",
+        aliases=["SAS", "aluminum sulfate"],
+        severity=Severity.WARNING,
+        reason="Aluminum accumulation, neurological concerns",
+        category="leavening_agent",
+    ),
+
+    # Additional preservatives and additives
+    IngredientInfo(
+        key="calcium_disodium_edta",
+        name="Calcium Disodium EDTA",
+        aliases=["EDTA", "E385", "disodium EDTA", "edetic acid"],
+        severity=Severity.WARNING,
+        reason="May affect mineral absorption, synthetic chelating agent",
+        category="preservative",
+    ),
+    IngredientInfo(
+        key="calcium_propionate",
+        name="Calcium Propionate",
+        aliases=["E282", "propionate", "sodium propionate"],
+        severity=Severity.WARNING,
+        reason="Linked to behavioral issues in children, irritability",
+        category="preservative",
+    ),
+    IngredientInfo(
+        key="sodium_erythorbate",
+        name="Sodium Erythorbate",
+        aliases=["E316", "erythorbate"],
+        severity=Severity.WARNING,
+        reason="Synthetic preservative, may cause headaches",
+        category="preservative",
+    ),
+
+    # Dough conditioners and emulsifiers
+    IngredientInfo(
+        key="datem",
+        name="DATEM",
+        aliases=[
+            "diacetyl tartaric acid esters of monoglycerides",
+            "E472e", "diacetyl tartaric acid ester"
+        ],
+        severity=Severity.WARNING,
+        reason="Synthetic emulsifier, limited safety data",
+        category="dough_conditioner",
+    ),
+    IngredientInfo(
+        key="sodium_stearoyl_lactylate",
+        name="Sodium Stearoyl Lactylate",
+        aliases=["SSL", "E481", "calcium stearoyl lactylate", "E482"],
+        severity=Severity.WARNING,
+        reason="Synthetic emulsifier, may cause digestive issues",
+        category="emulsifier",
+    ),
+
+    # Anti-foaming and processing aids
+    IngredientInfo(
+        key="dimethylpolysiloxane",
+        name="Dimethylpolysiloxane",
+        aliases=["E900", "PDMS", "silicone", "dimethicone"],
+        severity=Severity.WARNING,
+        reason="Industrial chemical used as anti-foaming agent",
+        category="processing_aid",
+    ),
+
+    # Artificial flavors
+    IngredientInfo(
+        key="artificial_flavor",
+        name="Artificial Flavor",
+        aliases=["artificial flavors", "artificial flavoring", "artificially flavored"],
+        severity=Severity.WARNING,
+        reason="Synthetic chemicals, lack of transparency, potential allergens",
+        category="flavoring",
+    ),
+
+    # Neotame (newer artificial sweetener)
+    IngredientInfo(
+        key="neotame",
+        name="Neotame",
+        aliases=["E961"],
+        severity=Severity.WARNING,
+        reason="Similar to aspartame but more potent, limited long-term data",
+        category="artificial_sweetener",
+    ),
+
+    # Advantame
+    IngredientInfo(
+        key="advantame",
+        name="Advantame",
+        aliases=["E969"],
+        severity=Severity.WARNING,
+        reason="Derived from aspartame, extremely limited safety data",
+        category="artificial_sweetener",
+    ),
+
     # ==================== WATCH SEVERITY ====================
     IngredientInfo(
         key="natural_flavors",
@@ -319,6 +478,126 @@ BAD_INGREDIENTS: List[IngredientInfo] = [
         severity=Severity.WATCH,
         reason="Kidney concerns in excess",
         category="preservative",
+    ),
+
+    # Refined/processed ingredients
+    IngredientInfo(
+        key="maltodextrin",
+        name="Maltodextrin",
+        aliases=["corn maltodextrin", "rice maltodextrin"],
+        severity=Severity.WATCH,
+        reason="High glycemic index, blood sugar spikes",
+        category="filler",
+    ),
+    IngredientInfo(
+        key="corn_syrup",
+        name="Corn Syrup",
+        aliases=["glucose syrup", "corn syrup solids"],
+        severity=Severity.WATCH,
+        reason="Highly processed sugar, blood sugar impact",
+        category="sweetener",
+        exclude_patterns=["high fructose corn syrup", "hfcs"],
+    ),
+    IngredientInfo(
+        key="modified_food_starch",
+        name="Modified Food Starch",
+        aliases=["modified corn starch", "modified starch", "modified tapioca starch"],
+        severity=Severity.WATCH,
+        reason="Chemically processed, low nutritional value",
+        category="thickener",
+    ),
+    IngredientInfo(
+        key="bleached_flour",
+        name="Bleached Flour",
+        aliases=["bleached wheat flour", "bleached enriched flour"],
+        severity=Severity.WATCH,
+        reason="Chemical bleaching agents, stripped nutrients",
+        category="flour",
+    ),
+
+    # Thickeners and stabilizers
+    IngredientInfo(
+        key="cellulose",
+        name="Cellulose",
+        aliases=[
+            "powdered cellulose", "microcrystalline cellulose",
+            "cellulose gum", "cellulose gel", "E460", "E461", "E466"
+        ],
+        severity=Severity.WATCH,
+        reason="Wood pulp filler, no nutritional value",
+        category="filler",
+    ),
+    IngredientInfo(
+        key="silicon_dioxide",
+        name="Silicon Dioxide",
+        aliases=["E551", "silica", "anti-caking agent"],
+        severity=Severity.WATCH,
+        reason="Industrial anti-caking agent, indigestible",
+        category="anti_caking",
+    ),
+    IngredientInfo(
+        key="magnesium_stearate",
+        name="Magnesium Stearate",
+        aliases=["E572", "stearic acid magnesium salt"],
+        severity=Severity.WATCH,
+        reason="Processing aid, may affect nutrient absorption",
+        category="processing_aid",
+    ),
+
+    # Soy derivatives
+    IngredientInfo(
+        key="soy_lecithin",
+        name="Soy Lecithin",
+        aliases=["lecithin", "E322"],
+        severity=Severity.WATCH,
+        reason="Often from GMO soy, allergen for some",
+        category="emulsifier",
+    ),
+    IngredientInfo(
+        key="soy_protein_isolate",
+        name="Soy Protein Isolate",
+        aliases=["isolated soy protein", "soy protein concentrate"],
+        severity=Severity.WATCH,
+        reason="Highly processed, may contain hexane residues",
+        category="protein",
+    ),
+
+    # Gums (can cause digestive issues for sensitive individuals)
+    IngredientInfo(
+        key="xanthan_gum",
+        name="Xanthan Gum",
+        aliases=["E415"],
+        severity=Severity.WATCH,
+        reason="May cause digestive issues in some people",
+        category="thickener",
+    ),
+    IngredientInfo(
+        key="guar_gum",
+        name="Guar Gum",
+        aliases=["E412"],
+        severity=Severity.WATCH,
+        reason="May cause bloating and gas in sensitive individuals",
+        category="thickener",
+    ),
+
+    # Palm oil
+    IngredientInfo(
+        key="palm_oil",
+        name="Palm Oil",
+        aliases=["palm kernel oil", "palmitate", "palm fruit oil"],
+        severity=Severity.WATCH,
+        reason="High in saturated fat, environmental concerns",
+        category="fat",
+    ),
+
+    # Dextrose and processed sugars
+    IngredientInfo(
+        key="dextrose",
+        name="Dextrose",
+        aliases=["glucose", "grape sugar"],
+        severity=Severity.WATCH,
+        reason="Refined sugar, rapid blood sugar spike",
+        category="sweetener",
     ),
 ]
 
