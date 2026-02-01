@@ -9,6 +9,13 @@ from typing import Dict, Any, List, Optional
 from fastmcp import Context
 from pydantic import Field
 from .shared import get_authenticated_client
+from ..analytics.safety import (
+    get_all_safe_product_ids,
+    get_all_blocked_product_ids,
+    get_disabled_ingredients,
+    is_filtering_enabled,
+)
+from ..analytics.ingredients import check_product_safety
 
 
 # Cart storage file
@@ -273,6 +280,10 @@ def register_tools(mcp):
             default=False,
             description="If True, returns preview without adding to cart (batch mode)"
         ),
+        confirm_unsafe: bool = Field(
+            default=False,
+            description="Set to True to override safety warnings and add flagged products"
+        ),
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
@@ -295,11 +306,19 @@ def register_tools(mcp):
         Step 2: Call with preview_only=False after user approval
             - Actually adds items to cart
 
+        SAFETY CHECKS:
+        - Products are checked for bad ingredients (nitrites, HFCS, etc.)
+        - Safe-listed products bypass all checks
+        - Blocked products require double confirmation
+        - If flagged, returns warning with requires_confirmation: true
+        - Set confirm_unsafe=True to add flagged products anyway
+
         Args:
             items: Product ID string OR list of item dicts
             quantity: Quantity for single mode (default: 1)
             modality: Fulfillment method for single mode - PICKUP or DELIVERY
             preview_only: If True, returns preview without modifying cart
+            confirm_unsafe: Set to True to override safety warnings
 
         Returns:
             Dictionary confirming item(s) added or preview
@@ -387,6 +406,80 @@ def register_tools(mcp):
                     "skip_suggestions": skip_suggestions,
                     "next_step": "Review and call again with preview_only=False to add"
                 }
+
+            # Safety check - check products for bad ingredients
+            filtering_enabled = is_filtering_enabled()
+            safety_warnings = []
+            blocked_items = []
+
+            if filtering_enabled and not confirm_unsafe:
+                # Pre-load safety data for efficient lookups
+                safe_ids = get_all_safe_product_ids()
+                blocked_ids_set = get_all_blocked_product_ids()
+                disabled_ingredients = get_disabled_ingredients()
+
+                for item in formatted_items:
+                    product_id = item["product_id"]
+                    description = item.get("description") or ""
+
+                    # Safe-listed products bypass all checks
+                    if product_id in safe_ids:
+                        continue
+
+                    # Check blocked list
+                    if product_id in blocked_ids_set:
+                        blocked_items.append({
+                            "product_id": product_id,
+                            "description": description,
+                            "reason": "Product is on your blocked list"
+                        })
+                        continue
+
+                    # Check for bad ingredients (only if description available)
+                    if description:
+                        safety_result = check_product_safety(
+                            description=description,
+                            disabled_ingredients=disabled_ingredients,
+                        )
+
+                        if safety_result.has_concerns:
+                            flagged = []
+                            for match in safety_result.matches:
+                                flagged.append({
+                                    "ingredient": match.ingredient_name,
+                                    "severity": match.severity.value,
+                                    "reason": match.reason,
+                                    "matched_text": match.matched_text
+                                })
+
+                            safety_warnings.append({
+                                "product_id": product_id,
+                                "description": description,
+                                "severity": safety_result.highest_severity.value,
+                                "flagged_ingredients": flagged
+                            })
+
+                # If we have safety concerns and user hasn't confirmed
+                if blocked_items or safety_warnings:
+                    all_concerns = blocked_items + safety_warnings
+                    return {
+                        "success": False,
+                        "requires_confirmation": True,
+                        "message": (
+                            "Some products have safety concerns. "
+                            "Set confirm_unsafe=True to add anyway."
+                        ),
+                        "blocked_items": blocked_items,
+                        "safety_warnings": safety_warnings,
+                        "total_flagged": len(all_concerns),
+                        "items_requested": len(formatted_items),
+                        "next_step": (
+                            "Review the flagged ingredients and either: "
+                            "(1) call again with confirm_unsafe=True to add anyway, "
+                            "(2) remove flagged items from your request, or "
+                            "(3) use approve_product() to safe-list products you trust"
+                        )
+                    }
 
             # Actual add mode
             if ctx:

@@ -14,6 +14,15 @@ from .shared import (
     format_currency
 )
 from ..analytics.favorites import get_all_favorite_product_ids
+from ..analytics.safety import (
+    get_all_safe_product_ids,
+    get_all_blocked_product_ids,
+    get_disabled_ingredients,
+    is_filtering_enabled,
+    get_block_mode,
+    BlockMode,
+)
+from ..analytics.ingredients import check_product_safety
 
 
 def register_tools(mcp):
@@ -210,6 +219,22 @@ def register_tools(mcp):
             except Exception:
                 pass
 
+        # Get safety data once
+        filtering_enabled = is_filtering_enabled()
+        safe_ids = set()
+        blocked_ids = set()
+        disabled_ingredients = set()
+        block_mode = BlockMode.SOFT
+
+        if filtering_enabled:
+            try:
+                safe_ids = get_all_safe_product_ids()
+                blocked_ids = get_all_blocked_product_ids()
+                disabled_ingredients = get_disabled_ingredients()
+                block_mode = get_block_mode()
+            except Exception:
+                pass
+
         def format_product(product: Dict) -> Dict:
             """Format a single product."""
             fp = {
@@ -264,23 +289,106 @@ def register_tools(mcp):
                     if img.get("sizes")
                 ]
 
+            # Add safety status
+            product_id = fp.get("product_id", "")
+            description = fp.get("description", "")
+
+            if filtering_enabled:
+                # Check if on safe list (bypasses all checks)
+                if product_id in safe_ids:
+                    fp["is_safe_listed"] = True
+                    fp["is_blocked"] = False
+                    fp["safety_status"] = "safe"
+                    fp["flagged_ingredients"] = []
+                # Check if on blocked list
+                elif product_id in blocked_ids:
+                    fp["is_safe_listed"] = False
+                    fp["is_blocked"] = True
+                    fp["safety_status"] = "blocked"
+                    fp["flagged_ingredients"] = []
+                else:
+                    # Check for bad ingredients
+                    fp["is_safe_listed"] = False
+                    fp["is_blocked"] = False
+                    safety_result = check_product_safety(
+                        description=description,
+                        brand=fp.get("brand"),
+                        disabled_ingredients=disabled_ingredients,
+                    )
+                    if not safety_result.has_concerns:
+                        fp["safety_status"] = "unknown"
+                        fp["flagged_ingredients"] = []
+                    else:
+                        fp["safety_status"] = safety_result.highest_severity.value
+                        fp["flagged_ingredients"] = [
+                            {
+                                "ingredient": m.ingredient_name,
+                                "severity": m.severity.value,
+                                "reason": m.reason,
+                                "matched_text": m.matched_text,
+                            }
+                            for m in safety_result.matches
+                        ]
+            else:
+                # Filtering disabled - no safety status
+                fp["is_safe_listed"] = False
+                fp["is_blocked"] = False
+                fp["safety_status"] = "unknown"
+                fp["flagged_ingredients"] = []
+
             return fp
 
-        def mark_and_sort_favorites(products: List[Dict]) -> tuple[List[Dict], int]:
-            """Mark favorites and sort them to top."""
+        def mark_and_sort_products(products: List[Dict]) -> tuple[List[Dict], int, dict]:
+            """Mark favorites and sort by safety status then favorites."""
             fav_count = 0
+            safety_counts = {"safe": 0, "blocked": 0, "critical": 0, "warning": 0, "watch": 0, "unknown": 0}
+
             for p in products:
                 is_fav = p.get("product_id") in favorite_ids
                 p["is_favorite"] = is_fav
                 if is_fav:
                     fav_count += 1
+                # Count safety statuses
+                status = p.get("safety_status", "unknown")
+                if status in safety_counts:
+                    safety_counts[status] += 1
 
-            if prioritize_favorites and fav_count > 0:
-                favs = [p for p in products if p["is_favorite"]]
-                non_favs = [p for p in products if not p["is_favorite"]]
-                products = favs + non_favs
+            # In hard-block mode, filter out blocked and critical products
+            if filtering_enabled and block_mode == BlockMode.HARD:
+                products = [
+                    p for p in products
+                    if p.get("safety_status") not in ("blocked", "critical")
+                ]
 
-            return products, fav_count
+            # Sort order: safe-listed > favorites > unknown > watch > warning > critical > blocked
+            def sort_key(p):
+                status = p.get("safety_status", "unknown")
+                is_fav = p.get("is_favorite", False)
+                is_safe = p.get("is_safe_listed", False)
+
+                # Priority: lower number = higher priority
+                if is_safe:
+                    priority = 0
+                elif is_fav and status not in ("blocked", "critical"):
+                    priority = 1
+                elif status == "unknown":
+                    priority = 2
+                elif status == "watch":
+                    priority = 3
+                elif status == "warning":
+                    priority = 4
+                elif status == "critical":
+                    priority = 5
+                elif status == "blocked":
+                    priority = 6
+                else:
+                    priority = 7
+                return priority
+
+            if prioritize_favorites or filtering_enabled:
+                products = sorted(products, key=sort_key)
+
+            return products, fav_count, safety_counts
 
         async def search_single(term: str) -> tuple[str, Dict[str, Any]]:
             """Search for a single term."""
@@ -294,14 +402,19 @@ def register_tools(mcp):
                 )
 
                 if not products or "data" not in products or not products["data"]:
-                    return (term, {"count": 0, "favorites_count": 0, "data": []})
+                    return (term, {"count": 0, "favorites_count": 0, "safety_counts": {}, "data": []})
 
                 formatted = [format_product(p) for p in products["data"]]
-                formatted, fav_count = mark_and_sort_favorites(formatted)
+                formatted, fav_count, safety_counts = mark_and_sort_products(formatted)
 
                 return (
                     term,
-                    {"count": len(formatted), "favorites_count": fav_count, "data": formatted},
+                    {
+                        "count": len(formatted),
+                        "favorites_count": fav_count,
+                        "safety_counts": safety_counts,
+                        "data": formatted,
+                    },
                 )
             except Exception as e:
                 return (term, {"error": str(e), "count": 0, "data": []})
@@ -317,6 +430,7 @@ def register_tools(mcp):
                 errors = {}
                 total_results = 0
                 total_favorites = 0
+                total_safety = {"safe": 0, "blocked": 0, "critical": 0, "warning": 0, "watch": 0, "unknown": 0}
 
                 for term, result in results_list:
                     if "error" in result:
@@ -325,10 +439,14 @@ def register_tools(mcp):
                         results[term] = result
                         total_results += result["count"]
                         total_favorites += result["favorites_count"]
+                        for k, v in result.get("safety_counts", {}).items():
+                            if k in total_safety:
+                                total_safety[k] += v
 
                 if ctx:
+                    flagged = total_safety.get("critical", 0) + total_safety.get("warning", 0)
                     await ctx.info(
-                        f"Found {total_results} products ({total_favorites} favorites)"
+                        f"Found {total_results} products ({total_favorites} favorites, {flagged} flagged)"
                     )
 
                 return {
@@ -337,6 +455,8 @@ def register_tools(mcp):
                     "terms_searched": len(terms),
                     "total_results": total_results,
                     "total_favorites": total_favorites,
+                    "safety_counts": total_safety,
+                    "filtering_enabled": filtering_enabled,
                     "results": results,
                     "errors": errors if errors else None,
                 }
@@ -346,9 +466,12 @@ def register_tools(mcp):
                 if "error" in result:
                     return {"success": False, "error": result["error"], "data": []}
 
+                safety_counts = result.get("safety_counts", {})
+                flagged = safety_counts.get("critical", 0) + safety_counts.get("warning", 0)
+
                 if ctx:
                     await ctx.info(
-                        f"Found {result['count']} products ({result['favorites_count']} favorites)"
+                        f"Found {result['count']} products ({result['favorites_count']} favorites, {flagged} flagged)"
                     )
 
                 return {
@@ -363,6 +486,8 @@ def register_tools(mcp):
                     },
                     "count": result["count"],
                     "favorites_count": result["favorites_count"],
+                    "safety_counts": safety_counts,
+                    "filtering_enabled": filtering_enabled,
                     "data": result["data"],
                 }
 
@@ -574,6 +699,22 @@ def register_tools(mcp):
 
         client = get_client_credentials_client()
 
+        # Get safety data
+        filtering_enabled = is_filtering_enabled()
+        safe_ids = set()
+        blocked_ids = set()
+        disabled_ingredients = set()
+        block_mode = BlockMode.SOFT
+
+        if filtering_enabled:
+            try:
+                safe_ids = get_all_safe_product_ids()
+                blocked_ids = get_all_blocked_product_ids()
+                disabled_ingredients = get_disabled_ingredients()
+                block_mode = get_block_mode()
+            except Exception:
+                pass
+
         try:
             products = client.product.search_products(
                 product_id=product_id, location_id=location_id
@@ -586,14 +727,18 @@ def register_tools(mcp):
                     "data": [],
                 }
 
-            # Format product data
+            # Format product data with safety status
             formatted_products = []
             for product in products["data"]:
+                pid = product.get("productId", "")
+                description = product.get("description", "")
+                brand = product.get("brand")
+
                 formatted_product = {
-                    "product_id": product.get("productId"),
+                    "product_id": pid,
                     "upc": product.get("upc"),
-                    "description": product.get("description"),
-                    "brand": product.get("brand"),
+                    "description": description,
+                    "brand": brand,
                     "categories": product.get("categories", []),
                 }
 
@@ -610,6 +755,46 @@ def register_tools(mcp):
                         "formatted_sale": format_currency(price.get("promo")),
                     }
 
+                # Add safety status
+                if filtering_enabled:
+                    if pid in safe_ids:
+                        formatted_product["is_safe_listed"] = True
+                        formatted_product["is_blocked"] = False
+                        formatted_product["safety_status"] = "safe"
+                        formatted_product["flagged_ingredients"] = []
+                    elif pid in blocked_ids:
+                        formatted_product["is_safe_listed"] = False
+                        formatted_product["is_blocked"] = True
+                        formatted_product["safety_status"] = "blocked"
+                        formatted_product["flagged_ingredients"] = []
+                    else:
+                        formatted_product["is_safe_listed"] = False
+                        formatted_product["is_blocked"] = False
+                        safety_result = check_product_safety(
+                            description=description,
+                            brand=brand,
+                            disabled_ingredients=disabled_ingredients,
+                        )
+                        if not safety_result.has_concerns:
+                            formatted_product["safety_status"] = "unknown"
+                            formatted_product["flagged_ingredients"] = []
+                        else:
+                            formatted_product["safety_status"] = safety_result.highest_severity.value
+                            formatted_product["flagged_ingredients"] = [
+                                {
+                                    "ingredient": m.ingredient_name,
+                                    "severity": m.severity.value,
+                                    "reason": m.reason,
+                                    "matched_text": m.matched_text,
+                                }
+                                for m in safety_result.matches
+                            ]
+                else:
+                    formatted_product["is_safe_listed"] = False
+                    formatted_product["is_blocked"] = False
+                    formatted_product["safety_status"] = "unknown"
+                    formatted_product["flagged_ingredients"] = []
+
                 formatted_products.append(formatted_product)
 
             # Get favorite product IDs
@@ -620,24 +805,51 @@ def register_tools(mcp):
                 except Exception:
                     pass
 
-            # Mark and sort favorites
+            # Mark favorites and count safety
             favorites_count = 0
+            safety_counts = {"safe": 0, "blocked": 0, "critical": 0, "warning": 0, "watch": 0, "unknown": 0}
             for product in formatted_products:
                 is_fav = product.get("product_id") in favorite_ids
                 product["is_favorite"] = is_fav
                 if is_fav:
                     favorites_count += 1
+                status = product.get("safety_status", "unknown")
+                if status in safety_counts:
+                    safety_counts[status] += 1
 
-            if prioritize_favorites and favorites_count > 0:
-                favorite_products = [p for p in formatted_products if p["is_favorite"]]
-                non_favorite_products = [
-                    p for p in formatted_products if not p["is_favorite"]
+            # Filter and sort
+            if filtering_enabled and block_mode == BlockMode.HARD:
+                formatted_products = [
+                    p for p in formatted_products
+                    if p.get("safety_status") not in ("blocked", "critical")
                 ]
-                formatted_products = favorite_products + non_favorite_products
 
+            if prioritize_favorites or filtering_enabled:
+                def sort_key(p):
+                    status = p.get("safety_status", "unknown")
+                    is_fav = p.get("is_favorite", False)
+                    is_safe = p.get("is_safe_listed", False)
+                    if is_safe:
+                        return 0
+                    elif is_fav and status not in ("blocked", "critical"):
+                        return 1
+                    elif status == "unknown":
+                        return 2
+                    elif status == "watch":
+                        return 3
+                    elif status == "warning":
+                        return 4
+                    elif status == "critical":
+                        return 5
+                    elif status == "blocked":
+                        return 6
+                    return 7
+                formatted_products = sorted(formatted_products, key=sort_key)
+
+            flagged = safety_counts.get("critical", 0) + safety_counts.get("warning", 0)
             if ctx:
                 await ctx.info(
-                    f"Found {len(formatted_products)} products ({favorites_count} favorites)"
+                    f"Found {len(formatted_products)} products ({favorites_count} favorites, {flagged} flagged)"
                 )
 
             return {
@@ -649,6 +861,8 @@ def register_tools(mcp):
                 },
                 "count": len(formatted_products),
                 "favorites_count": favorites_count,
+                "safety_counts": safety_counts,
+                "filtering_enabled": filtering_enabled,
                 "data": formatted_products,
             }
 

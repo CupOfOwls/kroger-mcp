@@ -227,9 +227,51 @@ def initialize_database() -> None:
                 UNIQUE(plan_id, meal_date, meal_slot)
             );
 
+            -- Safe products (user-approved, bypass all ingredient checks)
+            CREATE TABLE IF NOT EXISTS safe_products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id TEXT UNIQUE NOT NULL,
+                description TEXT,
+                brand TEXT,
+                added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                added_reason TEXT
+            );
+
+            -- Blocked products (user-rejected, require explicit confirmation)
+            CREATE TABLE IF NOT EXISTS blocked_products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id TEXT UNIQUE NOT NULL,
+                description TEXT,
+                blocked_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                blocked_reason TEXT,
+                auto_blocked INTEGER DEFAULT 0
+            );
+
+            -- User ingredient preferences (enable/disable specific checks)
+            CREATE TABLE IF NOT EXISTS ingredient_preferences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ingredient_key TEXT UNIQUE NOT NULL,
+                enabled INTEGER DEFAULT 1,
+                severity TEXT DEFAULT 'warning',
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Safety settings (global configuration)
+            CREATE TABLE IF NOT EXISTS safety_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
             -- Create default favorites list
             INSERT OR IGNORE INTO favorite_lists (id, name, description, list_type)
             VALUES ('default', 'My Favorites', 'Default favorites list', 'custom');
+
+            -- Initialize default safety settings
+            INSERT OR IGNORE INTO safety_settings (key, value)
+            VALUES ('filtering_enabled', '1');
+            INSERT OR IGNORE INTO safety_settings (key, value)
+            VALUES ('block_mode', 'soft');
 
             -- Indexes for performance
             CREATE INDEX IF NOT EXISTS idx_purchase_events_product
@@ -260,6 +302,12 @@ def initialize_database() -> None:
                 ON meal_entries(meal_date);
             CREATE INDEX IF NOT EXISTS idx_meal_plans_dates
                 ON meal_plans(start_date, end_date);
+            CREATE INDEX IF NOT EXISTS idx_safe_products_product
+                ON safe_products(product_id);
+            CREATE INDEX IF NOT EXISTS idx_blocked_products_product
+                ON blocked_products(product_id);
+            CREATE INDEX IF NOT EXISTS idx_ingredient_preferences_key
+                ON ingredient_preferences(ingredient_key);
         """)
         conn.commit()
     finally:
@@ -310,7 +358,9 @@ def get_table_counts() -> dict:
                       'product_statistics', 'seasonal_patterns',
                       'recipes', 'recipe_ingredients', 'pantry_items',
                       'favorite_lists', 'favorite_list_items',
-                      'meal_plans', 'meal_entries']:
+                      'meal_plans', 'meal_entries',
+                      'safe_products', 'blocked_products',
+                      'ingredient_preferences', 'safety_settings']:
             cursor = conn.execute(f"SELECT COUNT(*) FROM {table}")
             counts[table] = cursor.fetchone()[0]
         return counts
