@@ -1,10 +1,21 @@
 """
 Safety management tools for Kroger MCP server.
 
-Provides tools for:
-- Managing safe-listed and blocked products
+This module provides tools for filtering products based on ingredient safety,
+designed to help users optimize for:
+
+- GENERAL HEALTH: Avoid additives linked to chronic disease outcomes
+- CANCER PREVENTION: Flag IARC-classified carcinogens and genotoxic additives
+- METABOLIC HEALTH: Identify blood sugar spiking ingredients and insulin disruptors
+- MICROBIOME OPTIMIZATION: Flag emulsifiers/sweeteners with gut-barrier disruption evidence
+- MINIMIZING ULTRA-PROCESSED FOODS: Detect markers of heavy industrial processing
+
+Tools include:
+- Managing safe-listed products (bypass all checks)
+- Managing blocked products (require confirmation)
 - Viewing and configuring ingredient filter settings
-- Checking product safety status
+- Checking product/cart safety status
+- Customizing which ingredients to check for
 """
 
 from typing import Dict, Any, Optional, List
@@ -101,14 +112,23 @@ def register_tools(mcp):
         ctx: Context = None,
     ) -> Dict[str, Any]:
         """
-        Get the list of flagged bad ingredients.
+        Get the evidence-based list of flagged ingredients.
+
+        This list is designed to optimize for: general health, cancer prevention,
+        metabolic health (blood sugar), microbiome optimization, and minimizing
+        ultra-processed foods.
+
+        Severity levels:
+        - CRITICAL: Strong human evidence (IARC carcinogens, FDA actions, EFSA concerns)
+        - WARNING: Moderate evidence, regulatory concern, or microbiome disruption
+        - WATCH: Markers of ultra-processing, minimize for optimal health
 
         Each ingredient includes:
         - key: Unique identifier
         - name: Display name
         - aliases: Alternative names to search for
         - severity: critical, warning, or watch
-        - reason: Why it's flagged
+        - reason: Evidence-based reason for flagging
         - category: Type of additive
 
         Args:

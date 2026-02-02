@@ -1,9 +1,28 @@
 """
 Bad ingredients detection for product safety filtering.
 
-This module contains a comprehensive list of unhealthy ingredients commonly
-found in processed foods, along with detection logic using regex patterns
-to avoid false positives.
+This module contains an evidence-based list of ingredients to avoid, designed
+to optimize for:
+
+1. GENERAL HEALTH - Avoiding additives linked to chronic disease outcomes
+2. CANCER PREVENTION - Flagging IARC-classified carcinogens and genotoxic additives
+3. METABOLIC HEALTH - Identifying ingredients that spike blood sugar or disrupt
+   insulin response
+4. MICROBIOME OPTIMIZATION - Flagging emulsifiers and sweeteners with consistent
+   gut-barrier disruption or dysbiosis evidence in human/animal studies
+5. MINIMIZING ULTRA-PROCESSED FOODS - Detecting markers of heavy industrial
+   processing (emulsifiers, artificial colors, synthetic preservatives)
+
+Severity levels are assigned based on strength of evidence:
+- CRITICAL: Strong human outcome evidence (IARC classifications, FDA actions,
+  EFSA safety concerns) or consistent mechanistic evidence at real-world exposures
+- WARNING: Moderate evidence of harm, regulatory concern in some jurisdictions,
+  or consistent microbiome disruption signals
+- WATCH: Markers of ultra-processing or ingredients to minimize for optimal health,
+  even if not directly harmful
+
+Sources include: WHO/IARC, EFSA, FDA, peer-reviewed studies on gut microbiome,
+and systematic reviews on ultra-processed food consumption.
 """
 
 import re
@@ -320,8 +339,8 @@ BAD_INGREDIENTS: List[IngredientInfo] = [
         key="titanium_dioxide",
         name="Titanium Dioxide",
         aliases=["E171", "TiO2"],
-        severity=Severity.WARNING,
-        reason="Nanoparticle concerns, banned in EU food",
+        severity=Severity.CRITICAL,
+        reason="EFSA: genotoxicity cannot be ruled out, accumulates in body, banned in EU food",
         category="whitening_agent",
     ),
     IngredientInfo(
