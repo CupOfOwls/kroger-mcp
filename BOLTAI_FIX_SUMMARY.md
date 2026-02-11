@@ -7,7 +7,7 @@ All uv-based MCP servers (kroger, wrds-mcp) were failing with "Connection Error 
 **GUI applications on macOS don't inherit the full user PATH.** Bolt.ai couldn't find the `uv` command at `/opt/homebrew/bin/uv` because that directory wasn't in its limited PATH.
 
 ## Solution
-**Bypass `uv` entirely and invoke Python directly from each virtual environment.**
+**Use the entry point scripts directly instead of `uv` or `python -m`.**
 
 Instead of:
 ```json
@@ -15,11 +15,12 @@ Instead of:
 "args": ["--directory", "/path/to/project", "run", "server-name"]
 ```
 
-Use:
+Use the entry point script that uv creates:
 ```json
-"command": "/path/to/project/.venv/bin/python",
-"args": ["-m", "module.name"]
+"command": "/path/to/project/.venv/bin/server-name"
 ```
+
+This is simpler, more reliable, and handles all Python path setup automatically.
 
 ## Changes Made
 
@@ -43,11 +44,7 @@ Use:
 **After:**
 ```json
 "kroger" : {
-  "command" : "/Users/jeremyparker/Desktop/Claude Coding Projects/kroger-mcp/.venv/bin/python",
-  "args" : [
-    "-m",
-    "kroger_mcp.server"
-  ],
+  "command" : "/Users/jeremyparker/Desktop/Claude Coding Projects/kroger-mcp/.venv/bin/kroger-mcp",
   "env" : { ... }
 }
 ```
@@ -69,11 +66,7 @@ Use:
 **After:**
 ```json
 "wrds-mcp" : {
-  "command" : "/Users/jeremyparker/Desktop/Claude Coding Projects/WRDS_MCP/.venv/bin/python",
-  "args" : [
-    "-m",
-    "mcp_server.server"
-  ]
+  "command" : "/Users/jeremyparker/Desktop/Claude Coding Projects/WRDS_MCP/.venv/bin/wrds-mcp"
 }
 ```
 
@@ -98,17 +91,20 @@ Use:
 
 ## Why This Works
 
-- **Direct Python execution** - No PATH lookup needed
-- **Absolute paths** - Bolt.ai can execute the binary directly
-- **Same runtime environment** - Virtual environment is properly activated
+- **Entry point scripts** - uv creates proper shell wrapper scripts that handle all setup
+- **Absolute paths** - Bolt.ai can execute the scripts directly, no PATH lookup needed
+- **Automatic venv activation** - Scripts properly set up PYTHONPATH and use venv Python
 - **No `uv` dependency** - Works regardless of where `uv` is installed
+- **Simpler configuration** - No args needed, just the command path
 
 ## Technical Notes
 
 - Both virtual environments use Python 3.13.5 from uv's managed Python installation
-- Python symlinks point to: `/Users/jeremyparker/.local/share/uv/python/cpython-3.13.5-macos-aarch64-none/bin/python3.13`
-- The `-m` flag runs the module as a script (equivalent to `python -m module.name`)
+- Entry point scripts are located at `.venv/bin/kroger-mcp` and `.venv/bin/wrds-mcp`
+- These scripts are shell wrappers that properly invoke the venv Python with correct paths
+- Entry point scripts are created automatically by uv during package installation
 - Environment variables (credentials) are preserved in the configuration
+- No args needed - the entry point scripts handle everything
 
 ## Status
 ✅ **Fix implemented and tested successfully**
