@@ -247,24 +247,35 @@ def register_tools(mcp):
 
     @mcp.tool()
     async def add_to_watchlist(
-        product_id: str = Field(description="Product ID to watch for price drops"),
+        product_id: str | List[str] = Field(
+            description=(
+                "Product ID or list of IDs to watch for price drops. "
+                "Max 30 products per batch request."
+            )
+        ),
         description: Optional[str] = Field(
-            default=None, description="Product description (optional)"
+            default=None, description="Product description (applied to all items in batch, fetched automatically if not provided)"
         ),
         target_price: Optional[float] = Field(
-            default=None, description="Alert when price reaches this target (optional)"
+            default=None, description="Alert when price reaches this target (applied to all items in batch)"
         ),
         priority: int = Field(
             default=1,
-            description="Priority: 1=low, 2=medium, 3=high (affects scan frequency)",
+            description="Priority: 1=low, 2=medium, 3=high (affects scan frequency, applied to all items)",
         ),
         ctx: Context = None,
     ) -> Dict[str, Any]:
         """
-        Add product to watchlist for price monitoring.
+        Add product(s) to watchlist for price monitoring. Supports batch operations.
 
-        The system will periodically check this product's price and alert
-        you when it goes on sale or reaches your target price.
+        SINGLE MODE:
+            add_to_watchlist(product_id="0001111041700", priority=2)
+
+        BATCH MODE:
+            add_to_watchlist(product_id=["001", "002", "003"], priority=2)
+
+        The system will periodically check these products' prices and alert
+        you when they go on sale or reach your target price.
 
         Priority levels:
         - 1 (low): Checked weekly
@@ -272,63 +283,108 @@ def register_tools(mcp):
         - 3 (high): Checked daily
 
         Returns:
-            Confirmation with current price and watchlist status
+            Single mode: Confirmation with current price and watchlist status
+            Batch mode: {results: {product_id: result, ...}, summary: {...}}
         """
-        # Get current price
+        # Normalize to list
+        ids = [product_id] if isinstance(product_id, str) else product_id
+        is_batch = len(ids) > 1
+
+        if len(ids) > 30:
+            return {
+                "success": False,
+                "error": "Maximum 30 products per batch request"
+            }
+
+        # Get location for price lookups
         location_id = get_preferred_location_id()
-        current_price = None
-        current_on_sale = False
-
-        if location_id:
-            try:
-                client = get_client_credentials_client()
-                product_response = client.get_product(
-                    product_id=product_id, location_id=location_id
-                )
-                if product_response and "data" in product_response:
-                    product_data = product_response.get("data", {})
-                    pricing = product_data.get("pricing", {})
-                    current_price = pricing.get("sale_price") or pricing.get("regular_price")
-                    current_on_sale = pricing.get("on_sale", False)
-                    if not description:
-                        description = product_data.get("description")
-            except Exception:
-                pass
-
-        # Add to watchlist
-        with get_db_cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO deal_watchlist
-                (product_id, description, target_price, priority, best_price_seen, best_price_date)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(product_id) DO UPDATE SET
-                    description = excluded.description,
-                    target_price = excluded.target_price,
-                    priority = excluded.priority
-                """,
-                (
-                    product_id,
-                    description,
-                    target_price,
-                    priority,
-                    current_price,
-                    datetime.now().isoformat() if current_price else None,
-                ),
-            )
 
         priority_labels = {1: "low", 2: "medium", 3: "high"}
 
-        return {
-            "success": True,
-            "product_id": product_id,
-            "description": description,
-            "current_price": current_price,
-            "current_on_sale": current_on_sale,
-            "target_price": target_price,
-            "priority": priority_labels.get(priority, "unknown"),
-            "message": f"Added to watchlist with {priority_labels.get(priority, 'unknown')} priority",
-        }
+        try:
+            results = {}
+            for pid in ids:
+                try:
+                    current_price = None
+                    current_on_sale = False
+                    prod_description = description
+
+                    # Get current price if location available
+                    if location_id:
+                        try:
+                            client = get_client_credentials_client()
+                            product_response = client.get_product(
+                                product_id=pid, location_id=location_id
+                            )
+                            if product_response and "data" in product_response:
+                                product_data = product_response.get("data", {})
+                                pricing = product_data.get("pricing", {})
+                                current_price = pricing.get("sale_price") or pricing.get("regular_price")
+                                current_on_sale = pricing.get("on_sale", False)
+                                if not prod_description:
+                                    prod_description = product_data.get("description")
+                        except Exception:
+                            pass
+
+                    # Add to watchlist
+                    with get_db_cursor() as cursor:
+                        cursor.execute(
+                            """
+                            INSERT INTO deal_watchlist
+                            (product_id, description, target_price, priority, best_price_seen, best_price_date)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(product_id) DO UPDATE SET
+                                description = excluded.description,
+                                target_price = excluded.target_price,
+                                priority = excluded.priority
+                            """,
+                            (
+                                pid,
+                                prod_description,
+                                target_price,
+                                priority,
+                                current_price,
+                                datetime.now().isoformat() if current_price else None,
+                            ),
+                        )
+
+                    results[pid] = {
+                        "success": True,
+                        "product_id": pid,
+                        "description": prod_description,
+                        "current_price": current_price,
+                        "current_on_sale": current_on_sale,
+                        "target_price": target_price,
+                        "priority": priority_labels.get(priority, "unknown"),
+                        "message": f"Added to watchlist with {priority_labels.get(priority, 'unknown')} priority",
+                    }
+                except Exception as e:
+                    results[pid] = {
+                        "success": False,
+                        "error": f"Failed to add {pid} to watchlist: {str(e)}"
+                    }
+
+            if is_batch:
+                success_count = sum(1 for r in results.values() if r.get('success'))
+                return {
+                    "success": True,
+                    "results": results,
+                    "summary": {
+                        "total": len(ids),
+                        "successful": success_count,
+                        "failed": len(ids) - success_count,
+                        "priority": priority_labels.get(priority, "unknown")
+                    }
+                }
+            else:
+                # Single mode - return flat response
+                return results[ids[0]]
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to add to watchlist: {str(e)}"
+            }
 
     @mcp.tool()
     async def get_price_history(

@@ -25,9 +25,13 @@ def register_tools(mcp):
 
     @mcp.tool()
     async def add_custom_ingredient(
-        ingredient_name: str = Field(description="Name of the ingredient to add"),
+        ingredient_name: str = Field(
+            default=None,
+            description="Name of the ingredient to add (single mode)"
+        ),
         severity: Literal["critical", "warning", "watch"] = Field(
-            description="Severity level: critical (strong evidence of harm), warning (moderate concern), watch (minimize for health)"
+            default=None,
+            description="Severity level for single mode: critical (strong evidence of harm), warning (moderate concern), watch (minimize for health)"
         ),
         category: Optional[str] = Field(
             default=None,
@@ -45,72 +49,179 @@ def register_tools(mcp):
             default=None,
             description="Personal notes about this ingredient"
         ),
+        ingredients: Optional[List[Dict[str, Any]]] = Field(
+            default=None,
+            description="Batch mode: List of {ingredient_name, severity, category, reason, aliases, notes} dicts (max 20)"
+        ),
         ctx: Context = None,
     ) -> Dict[str, Any]:
         """
-        Add a custom ingredient to your personal filter list.
+        Add custom ingredient(s) to your personal filter list. Supports batch operations.
 
-        This allows you to flag ingredients beyond the default 62. Changes take
-        effect immediately (no restart needed).
-
-        Example:
+        SINGLE MODE:
             add_custom_ingredient(
                 ingredient_name="maltitol",
                 severity="warning",
                 category="sugar_alcohol",
-                reason="Causes digestive distress, laxative effect",
-                aliases=["E965", "hydrogenated maltose"]
+                reason="Causes digestive distress",
+                aliases=["E965"]
             )
-        """
-        if ctx:
-            await ctx.info(f"Adding custom ingredient: {ingredient_name}")
 
-        conn = get_db_connection()
-        try:
-            # Check if already exists
-            cursor = conn.execute(
-                "SELECT id FROM custom_ingredients WHERE LOWER(ingredient_name) = LOWER(?)",
-                (ingredient_name,)
-            )
-            if cursor.fetchone():
+        BATCH MODE:
+            add_custom_ingredient(ingredients=[
+                {
+                    "ingredient_name": "maltitol",
+                    "severity": "warning",
+                    "category": "sugar_alcohol",
+                    "reason": "Digestive issues",
+                    "aliases": ["E965"]
+                },
+                {
+                    "ingredient_name": "sucralose",
+                    "severity": "critical",
+                    "reason": "Gut microbiome disruption"
+                }
+            ])
+
+        This allows you to flag ingredients beyond the default 62. Changes take
+        effect immediately (no restart needed).
+
+        Args:
+            ingredient_name: Single ingredient name (single mode)
+            severity: Severity for single mode
+            category: Category for single mode
+            reason: Reason for single mode
+            aliases: Aliases for single mode
+            notes: Notes for single mode
+            ingredients: List of ingredient dicts for batch mode
+
+        Returns:
+            Single mode: Confirmation with ingredient details
+            Batch mode: {results: {ingredient_name: result, ...}, summary: {...}}
+        """
+        # Determine mode and validate
+        if ingredients is not None:
+            # Batch mode
+            if len(ingredients) > 20:
                 return {
                     "success": False,
-                    "error": f"Ingredient '{ingredient_name}' already exists. Use edit_custom_ingredient to modify it."
+                    "error": "Maximum 20 ingredients per batch request"
                 }
 
-            # Insert new ingredient
-            aliases_json = json.dumps(aliases) if aliases else None
-            cursor = conn.execute(
-                """
-                INSERT INTO custom_ingredients
-                    (ingredient_name, severity, category, reason, aliases, notes)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (ingredient_name, severity, category, reason, aliases_json, notes)
-            )
-            conn.commit()
+            # Validate all items
+            for item in ingredients:
+                if "ingredient_name" not in item or "severity" not in item:
+                    return {
+                        "success": False,
+                        "error": "Each ingredient must have 'ingredient_name' and 'severity' fields"
+                    }
+                if item["severity"] not in ["critical", "warning", "watch"]:
+                    return {
+                        "success": False,
+                        "error": f"Invalid severity '{item['severity']}' for {item['ingredient_name']}. Must be 'critical', 'warning', or 'watch'"
+                    }
 
-            # Force pattern cache refresh
+            is_batch = True
+        else:
+            # Single mode
+            if not ingredient_name or not severity:
+                return {
+                    "success": False,
+                    "error": "Single mode requires both ingredient_name and severity parameters"
+                }
+
+            ingredients = [{
+                "ingredient_name": ingredient_name,
+                "severity": severity,
+                "category": category,
+                "reason": reason,
+                "aliases": aliases,
+                "notes": notes
+            }]
+            is_batch = False
+
+        if ctx and is_batch:
+            await ctx.info(f"Adding {len(ingredients)} custom ingredients")
+
+        conn = get_db_connection()
+        results = {}
+
+        try:
+            for item in ingredients:
+                name = item["ingredient_name"]
+                sev = item["severity"]
+                cat = item.get("category")
+                rsn = item.get("reason")
+                als = item.get("aliases")
+                nts = item.get("notes")
+
+                try:
+                    # Check if already exists
+                    cursor = conn.execute(
+                        "SELECT id FROM custom_ingredients WHERE LOWER(ingredient_name) = LOWER(?)",
+                        (name,)
+                    )
+                    if cursor.fetchone():
+                        results[name] = {
+                            "success": False,
+                            "error": f"Ingredient '{name}' already exists. Use edit_custom_ingredient to modify it."
+                        }
+                        continue
+
+                    # Insert new ingredient
+                    aliases_json = json.dumps(als) if als else None
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO custom_ingredients
+                            (ingredient_name, severity, category, reason, aliases, notes)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (name, sev, cat, rsn, aliases_json, nts)
+                    )
+                    conn.commit()
+
+                    results[name] = {
+                        "success": True,
+                        "message": f"Added custom ingredient: {name}",
+                        "ingredient_id": cursor.lastrowid,
+                        "details": {
+                            "name": name,
+                            "severity": sev,
+                            "category": cat,
+                            "reason": rsn,
+                            "aliases": als or [],
+                        }
+                    }
+
+                except Exception as e:
+                    results[name] = {
+                        "success": False,
+                        "error": f"Failed to add {name}: {str(e)}"
+                    }
+
+            # Force pattern cache refresh after all inserts
             get_compiled_patterns(force_refresh=True)
 
-            return {
-                "success": True,
-                "message": f"Added custom ingredient: {ingredient_name}",
-                "ingredient_id": cursor.lastrowid,
-                "details": {
-                    "name": ingredient_name,
-                    "severity": severity,
-                    "category": category,
-                    "reason": reason,
-                    "aliases": aliases or [],
+            if is_batch:
+                success_count = sum(1 for r in results.values() if r.get('success'))
+                return {
+                    "success": True,
+                    "results": results,
+                    "summary": {
+                        "total": len(ingredients),
+                        "successful": success_count,
+                        "failed": len(ingredients) - success_count
+                    }
                 }
-            }
+            else:
+                # Single mode - return flat response
+                return results[ingredients[0]["ingredient_name"]]
 
         except Exception as e:
             conn.rollback()
             return {
                 "success": False,
-                "error": f"Failed to add ingredient: {str(e)}"
+                "error": f"Failed to add ingredients: {str(e)}"
             }
         finally:
             conn.close()

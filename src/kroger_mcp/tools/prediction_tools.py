@@ -219,15 +219,30 @@ def register_tools(mcp):
     @mcp.tool()
     async def categorize_item(
         product_id: str = Field(
-            description="The product ID to categorize"
+            default=None,
+            description="Single product ID to categorize"
         ),
         category: str = Field(
+            default=None,
             description="Category: 'routine', 'regular', or 'treat'"
+        ),
+        items: Optional[List[Dict[str, Any]]] = Field(
+            default=None,
+            description="Batch mode: List of {product_id, category} dicts (max 50)"
         ),
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
-        Set or override the category for a product.
+        Set or override the category for product(s). Supports batch operations.
+
+        SINGLE MODE:
+            categorize_item(product_id="0001111041700", category="routine")
+
+        BATCH MODE:
+            categorize_item(items=[
+                {"product_id": "001", "category": "routine"},
+                {"product_id": "002", "category": "regular"}
+            ])
 
         Categories:
         - routine: Items purchased almost constantly (every 1-14 days)
@@ -240,32 +255,92 @@ def register_tools(mcp):
         Once manually set, the category won't be auto-changed.
 
         Args:
-            product_id: The product identifier
-            category: One of 'routine', 'regular', or 'treat'
+            product_id: Single product identifier (single mode)
+            category: Category for single mode
+            items: List of {product_id, category} for batch mode
 
         Returns:
-            Confirmation of the category change
+            Single mode: Confirmation of the category change
+            Batch mode: {results: {product_id: result, ...}, summary: {...}}
         """
         valid_categories = ['routine', 'regular', 'treat']
-        if category not in valid_categories:
-            return {
-                "success": False,
-                "error": f"Invalid category. Must be one of: {valid_categories}"
-            }
+
+        # Determine mode and validate
+        if items is not None:
+            # Batch mode
+            if len(items) > 50:
+                return {
+                    "success": False,
+                    "error": "Maximum 50 products per batch request"
+                }
+
+            # Validate all items
+            for item in items:
+                if "product_id" not in item or "category" not in item:
+                    return {
+                        "success": False,
+                        "error": "Each item must have 'product_id' and 'category' fields"
+                    }
+                if item["category"] not in valid_categories:
+                    return {
+                        "success": False,
+                        "error": f"Invalid category '{item['category']}'. Must be one of: {valid_categories}"
+                    }
+
+            is_batch = True
+        else:
+            # Single mode
+            if not product_id or not category:
+                return {
+                    "success": False,
+                    "error": "Single mode requires both product_id and category parameters"
+                }
+            if category not in valid_categories:
+                return {
+                    "success": False,
+                    "error": f"Invalid category. Must be one of: {valid_categories}"
+                }
+
+            items = [{"product_id": product_id, "category": category}]
+            is_batch = False
 
         try:
             from ..analytics.categories import set_product_category
 
-            result = set_product_category(product_id, category, is_override=True)
+            results = {}
+            for item in items:
+                pid = item["product_id"]
+                cat = item["category"]
+                try:
+                    result = set_product_category(pid, cat, is_override=True)
+                    results[pid] = {
+                        "success": True,
+                        "product_id": pid,
+                        "category": cat,
+                        "previous_category": result.previous_category,
+                        "was_auto_detected": not result.was_override,
+                        "message": f"Category set to '{cat}' for product {pid}"
+                    }
+                except Exception as e:
+                    results[pid] = {
+                        "success": False,
+                        "error": f"Failed to categorize {pid}: {str(e)}"
+                    }
 
-            return {
-                "success": True,
-                "product_id": product_id,
-                "category": category,
-                "previous_category": result.previous_category,
-                "was_auto_detected": not result.was_override,
-                "message": f"Category set to '{category}' for product {product_id}"
-            }
+            if is_batch:
+                success_count = sum(1 for r in results.values() if r.get('success'))
+                return {
+                    "success": True,
+                    "results": results,
+                    "summary": {
+                        "total": len(items),
+                        "successful": success_count,
+                        "failed": len(items) - success_count
+                    }
+                }
+            else:
+                # Single mode - return flat response
+                return results[items[0]["product_id"]]
         except Exception as e:
             return {
                 "success": False,
@@ -605,33 +680,78 @@ def register_tools(mcp):
 
     @mcp.tool()
     async def update_pantry_item(
-        product_id: str = Field(
-            description="Product ID of the pantry item"
+        product_id: str | List[str] = Field(
+            description=(
+                "Product ID or list of IDs to update. "
+                "Max 50 products per batch request."
+            )
         ),
         level: int = Field(
             ge=0, le=100,
-            description="New inventory level (0-100%)"
+            description="New inventory level (0-100%, applied to all items in batch)"
         ),
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
-        Manually set the inventory level for a pantry item.
+        Manually set the inventory level for pantry item(s). Supports batch operations.
+
+        SINGLE MODE:
+            update_pantry_item(product_id="0001111041700", level=50)
+
+        BATCH MODE:
+            update_pantry_item(product_id=["001", "002", "003"], level=50)
 
         Use this to correct the estimate when it's off, e.g., "I'm actually
         almost out of milk" -> set to 10%.
 
         Args:
-            product_id: The product to update
+            product_id: Product ID or list of IDs to update
             level: New percentage level (0=out, 100=full)
 
         Returns:
-            Updated item info
+            Single mode: Updated item info
+            Batch mode: {results: {product_id: result, ...}, summary: {...}}
         """
+        # Normalize to list
+        ids = [product_id] if isinstance(product_id, str) else product_id
+        is_batch = len(ids) > 1
+
+        if len(ids) > 50:
+            return {
+                "success": False,
+                "error": "Maximum 50 products per batch request"
+            }
+
         try:
             from ..analytics.pantry import update_pantry_level
 
-            result = update_pantry_level(product_id, level)
-            return result
+            results = {}
+            for pid in ids:
+                try:
+                    result = update_pantry_level(pid, level)
+                    results[pid] = result
+                except Exception as e:
+                    results[pid] = {
+                        "success": False,
+                        "error": f"Failed to update {pid}: {str(e)}"
+                    }
+
+            if is_batch:
+                success_count = sum(1 for r in results.values() if r.get('success'))
+                return {
+                    "success": True,
+                    "results": results,
+                    "summary": {
+                        "total": len(ids),
+                        "successful": success_count,
+                        "failed": len(ids) - success_count,
+                        "level_set": level
+                    }
+                }
+            else:
+                # Single mode - return flat response
+                return results[ids[0]]
+
         except Exception as e:
             return {
                 "success": False,
@@ -757,12 +877,15 @@ def register_tools(mcp):
 
     @mcp.tool()
     async def add_to_pantry(
-        product_id: str = Field(
-            description="Product ID to add to pantry tracking"
+        product_id: str | List[str] = Field(
+            description=(
+                "Product ID or list of IDs to add to pantry tracking. "
+                "Max 50 products per batch request."
+            )
         ),
         description: Optional[str] = Field(
             default=None,
-            description="Product description (fetched automatically if not provided)"
+            description="Product description (applied to all items in batch, fetched automatically if not provided)"
         ),
         level: int = Field(
             default=100, ge=0, le=100,
@@ -775,31 +898,74 @@ def register_tools(mcp):
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
-        Add an item to pantry tracking.
+        Add item(s) to pantry tracking. Supports batch operations.
+
+        SINGLE MODE:
+            add_to_pantry(product_id="0001111041700", level=100)
+
+        BATCH MODE:
+            add_to_pantry(product_id=["001", "002", "003"], level=100)
 
         The system will automatically estimate depletion based on your
         purchase history for this item.
 
         Args:
-            product_id: The product to track
-            description: Optional product description
+            product_id: Product ID or list of IDs to add
+            description: Optional product description (applied to all)
             level: Initial level (default 100%)
             low_threshold: Warn when below this level (default 20%)
 
         Returns:
-            Confirmation with depletion rate info
+            Single mode: Confirmation with depletion rate info
+            Batch mode: {results: {product_id: result, ...}, summary: {...}}
         """
+        # Normalize to list
+        ids = [product_id] if isinstance(product_id, str) else product_id
+        is_batch = len(ids) > 1
+
+        if len(ids) > 50:
+            return {
+                "success": False,
+                "error": "Maximum 50 products per batch request"
+            }
+
         try:
             from ..analytics.pantry import add_to_pantry
 
-            result = add_to_pantry(
-                product_id=product_id,
-                description=description,
-                level=level,
-                low_threshold=low_threshold,
-                auto_deplete=True
-            )
-            return result
+            results = {}
+            for pid in ids:
+                try:
+                    result = add_to_pantry(
+                        product_id=pid,
+                        description=description,
+                        level=level,
+                        low_threshold=low_threshold,
+                        auto_deplete=True
+                    )
+                    results[pid] = result
+                except Exception as e:
+                    results[pid] = {
+                        "success": False,
+                        "error": f"Failed to add {pid}: {str(e)}"
+                    }
+
+            if is_batch:
+                success_count = sum(1 for r in results.values() if r.get('success'))
+                return {
+                    "success": True,
+                    "results": results,
+                    "summary": {
+                        "total": len(ids),
+                        "successful": success_count,
+                        "failed": len(ids) - success_count,
+                        "level": level,
+                        "low_threshold": low_threshold
+                    }
+                }
+            else:
+                # Single mode - return flat response
+                return results[ids[0]]
+
         except Exception as e:
             return {
                 "success": False,
@@ -808,25 +974,69 @@ def register_tools(mcp):
 
     @mcp.tool()
     async def remove_from_pantry(
-        product_id: str = Field(
-            description="Product ID to remove from pantry tracking"
+        product_id: str | List[str] = Field(
+            description=(
+                "Product ID or list of IDs to remove from pantry tracking. "
+                "Max 50 products per batch request."
+            )
         ),
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
-        Remove an item from pantry tracking.
+        Remove item(s) from pantry tracking. Supports batch operations.
+
+        SINGLE MODE:
+            remove_from_pantry(product_id="0001111041700")
+
+        BATCH MODE:
+            remove_from_pantry(product_id=["001", "002", "003"])
 
         Args:
-            product_id: The product to stop tracking
+            product_id: Product ID or list of IDs to stop tracking
 
         Returns:
-            Confirmation of removal
+            Single mode: Confirmation of removal
+            Batch mode: {results: {product_id: result, ...}, summary: {...}}
         """
+        # Normalize to list
+        ids = [product_id] if isinstance(product_id, str) else product_id
+        is_batch = len(ids) > 1
+
+        if len(ids) > 50:
+            return {
+                "success": False,
+                "error": "Maximum 50 products per batch request"
+            }
+
         try:
             from ..analytics.pantry import remove_from_pantry
 
-            result = remove_from_pantry(product_id)
-            return result
+            results = {}
+            for pid in ids:
+                try:
+                    result = remove_from_pantry(pid)
+                    results[pid] = result
+                except Exception as e:
+                    results[pid] = {
+                        "success": False,
+                        "error": f"Failed to remove {pid}: {str(e)}"
+                    }
+
+            if is_batch:
+                success_count = sum(1 for r in results.values() if r.get('success'))
+                return {
+                    "success": True,
+                    "results": results,
+                    "summary": {
+                        "total": len(ids),
+                        "successful": success_count,
+                        "failed": len(ids) - success_count
+                    }
+                }
+            else:
+                # Single mode - return flat response
+                return results[ids[0]]
+
         except Exception as e:
             return {
                 "success": False,
