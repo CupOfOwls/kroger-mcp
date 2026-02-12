@@ -5,12 +5,95 @@ Tracks estimated inventory levels using percentage-based tracking.
 - Auto-depletes based on consumption rate analytics
 - Manual adjustments supported
 - Low inventory alerts when items drop below threshold
+- Automatic expiration date tracking based on product category
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from .database import get_db_connection, ensure_initialized
+
+
+# Shelf life in days for common categories
+CATEGORY_SHELF_LIFE = {
+    'routine': {
+        # IMPORTANT: More specific (longer) keywords must come FIRST
+        # because matching uses simple substring search
+
+        # Frozen Foods (3-6 months) - MUST BE FIRST due to keyword priority
+        'frozen vegetable': 240,
+        'frozen fruit': 240,
+        'frozen chicken': 180,
+        'frozen beef': 180,
+        'frozen pork': 180,
+        'frozen fish': 120,
+        'frozen seafood': 120,
+        'frozen pizza': 120,
+        'frozen meal': 90,
+        'frozen dinner': 90,
+        'ice cream': 60,
+        'frozen': 120,  # Generic frozen (after specific items)
+
+        # Dairy & Refrigerated
+        'sour cream': 14,  # Must come before 'cream'
+        'milk': 7,
+        'dairy': 7,
+        'cheese': 14,
+        'yogurt': 14,
+        'eggs': 21,
+        'butter': 30,
+        'cream': 7,
+
+        # Bakery
+        'bread': 5,
+        'bakery': 5,
+        'bagel': 5,
+        'roll': 5,
+        'tortilla': 7,
+
+        # Fresh Meat & Seafood (Refrigerated)
+        'ground': 2,  # Ground meat is shorter shelf life
+        'deli': 5,
+        'meat': 3,
+        'poultry': 3,
+        'chicken': 3,
+        'beef': 3,
+        'pork': 3,
+        'seafood': 2,
+        'fish': 2,
+
+        # Produce
+        'berries': 3,  # Must come before 'berry'
+        'berry': 3,
+        'lettuce': 5,
+        'greens': 5,
+        'salad': 5,
+        'apple': 14,
+        'orange': 14,
+        'banana': 5,
+        'vegetable': 7,  # Generic after specific
+        'fruit': 7,  # Generic after specific
+        'produce': 5,
+    },
+    'regular': {
+        # Longer shelf life perishables
+        'condiment': 90,
+        'juice': 14,
+        'refrigerated': 14,
+        'sauce': 60,
+        'ketchup': 180,
+        'mustard': 180,
+        'mayonnaise': 60,
+    },
+    'treat': None,  # Seasonal items typically don't expire quickly
+}
+
+# Default fallback (no category match)
+DEFAULT_SHELF_LIFE = {
+    'routine': 7,    # Weekly items default to 7 days
+    'regular': 30,   # Monthly items default to 30 days
+    'treat': None    # Seasonal items no default
+}
 
 
 def calculate_depletion_rate(product_id: str) -> float:
@@ -50,6 +133,118 @@ def calculate_depletion_rate(product_id: str) -> float:
         conn.close()
 
 
+def get_shelf_life_days(category: str, description: str) -> Optional[int]:
+    """
+    Determine shelf life days for a product based on category and keywords.
+
+    Scans product description for keyword matches to determine appropriate
+    shelf life. Returns None for non-perishable items.
+
+    Args:
+        category: Product category ('routine', 'regular', 'treat')
+        description: Product description to scan for keywords
+
+    Returns:
+        Shelf life in days, or None for non-perishables
+    """
+    if not category or not description:
+        return None
+
+    desc_lower = description.lower()
+    category_map = CATEGORY_SHELF_LIFE.get(category, {})
+
+    if category_map is None:
+        return None
+
+    # Check for keyword matches
+    for keyword, days in category_map.items():
+        if keyword in desc_lower:
+            return days
+
+    # Fallback to category default
+    return DEFAULT_SHELF_LIFE.get(category)
+
+
+def calculate_expiration_date(
+    purchase_date: str,
+    category: str,
+    description: str
+) -> Optional[str]:
+    """
+    Automatically calculate expiration date based on purchase date and category.
+
+    Args:
+        purchase_date: ISO date string (YYYY-MM-DD or full ISO timestamp)
+        category: Product category ('routine', 'regular', 'treat')
+        description: Product description for keyword matching
+
+    Returns:
+        ISO date string (YYYY-MM-DD) or None for non-perishables
+    """
+    shelf_life = get_shelf_life_days(category, description)
+    if not shelf_life:
+        return None
+
+    try:
+        # Handle both full ISO timestamps and date-only strings
+        if 'T' in purchase_date:
+            purchase = datetime.fromisoformat(purchase_date).date()
+        else:
+            purchase = datetime.fromisoformat(purchase_date).date()
+        expiration = purchase + timedelta(days=shelf_life)
+        return expiration.isoformat()
+    except (ValueError, TypeError):
+        return None
+
+
+def calculate_days_to_expiration(expiration_date: Optional[str]) -> Optional[int]:
+    """
+    Calculate days until expiration from ISO date string.
+
+    Args:
+        expiration_date: ISO date string (YYYY-MM-DD)
+
+    Returns:
+        Days until expiration (positive for future, negative for past),
+        or None if no expiration date
+    """
+    if not expiration_date:
+        return None
+
+    try:
+        exp_date = datetime.fromisoformat(expiration_date).date()
+        today = datetime.now().date()
+        delta = (exp_date - today).days
+        return delta
+    except (ValueError, TypeError):
+        return None
+
+
+def get_expiration_status(days_to_expiration: Optional[int]) -> str:
+    """
+    Map days to expiration into status categories.
+
+    Args:
+        days_to_expiration: Days until expiration (can be negative)
+
+    Returns:
+        Status string: 'expired', 'critical', 'warning', 'ok', 'fresh', or 'none'
+    """
+    if days_to_expiration is None:
+        return 'none'
+
+    if days_to_expiration < 0:
+        return 'expired'
+    elif days_to_expiration <= 2:
+        return 'critical'
+    elif days_to_expiration <= 6:
+        return 'warning'
+    elif days_to_expiration <= 13:
+        return 'ok'
+    else:
+        return 'fresh'
+
+
 def restock_item(
     product_id: str,
     level: int = 100,
@@ -61,13 +256,17 @@ def restock_item(
     Called automatically when an order is placed, or manually
     when user restocks from another source.
 
+    AUTOMATIC EXPIRATION TRACKING:
+    - Calculates expiration date based on product category and shelf life
+    - No user input required - completely automatic!
+
     Args:
         product_id: The product identifier
         level: Percentage level (0-100), default 100
         description: Product description (optional)
 
     Returns:
-        Dict with success status and item info
+        Dict with success status and item info (includes expiration data)
     """
     ensure_initialized()
 
@@ -88,6 +287,23 @@ def restock_item(
             row = cursor.fetchone()
             description = row['description'] if row else None
 
+        # Get category from product_statistics for expiration calculation
+        cursor = conn.execute(
+            "SELECT detected_category FROM product_statistics WHERE product_id = ?",
+            (product_id,)
+        )
+        row = cursor.fetchone()
+        category = row['detected_category'] if row else 'regular'
+
+        # AUTO-CALCULATE EXPIRATION DATE (no user input needed!)
+        purchase_date = datetime.now().isoformat()
+        expiration_date = calculate_expiration_date(
+            purchase_date,
+            category,
+            description or ''
+        )
+        days_to_exp = calculate_days_to_expiration(expiration_date)
+
         # Ensure product exists in products table (required for foreign key)
         conn.execute("""
             INSERT INTO products (product_id, description, created_at, updated_at)
@@ -97,19 +313,22 @@ def restock_item(
                 updated_at = excluded.updated_at
         """, (product_id, description, now, now))
 
-        # Upsert pantry item
+        # Upsert pantry item WITH expiration tracking
         conn.execute("""
             INSERT INTO pantry_items
             (product_id, description, level_percent, last_restocked_at,
-             last_updated_at, daily_depletion_rate)
-            VALUES (?, ?, ?, ?, ?, ?)
+             last_updated_at, daily_depletion_rate, expiration_date, days_to_expiration)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(product_id) DO UPDATE SET
                 level_percent = excluded.level_percent,
                 last_restocked_at = excluded.last_restocked_at,
                 last_updated_at = excluded.last_updated_at,
                 daily_depletion_rate = excluded.daily_depletion_rate,
+                expiration_date = excluded.expiration_date,
+                days_to_expiration = excluded.days_to_expiration,
                 description = COALESCE(excluded.description, description)
-        """, (product_id, description, level, now, now, depletion_rate))
+        """, (product_id, description, level, now, now, depletion_rate,
+              expiration_date, days_to_exp))
         conn.commit()
 
         return {
@@ -118,7 +337,10 @@ def restock_item(
             'description': description,
             'level_percent': level,
             'daily_depletion_rate': round(depletion_rate, 2),
-            'restocked_at': now
+            'restocked_at': now,
+            'expiration_date': expiration_date,
+            'days_to_expiration': days_to_exp,
+            'auto_calculated': expiration_date is not None
         }
     finally:
         conn.close()
@@ -350,16 +572,20 @@ def remove_from_pantry(product_id: str) -> Dict[str, Any]:
 
 def get_pantry_status(apply_depletion: bool = True) -> List[Dict[str, Any]]:
     """
-    Get all pantry items with current estimated levels.
+    Get all pantry items with current estimated levels and expiration status.
 
     If apply_depletion is True, calculates current level based on
     time elapsed since last update and depletion rate.
+
+    EXPIRATION TRACKING:
+    - Automatically recalculates days_to_expiration for current date
+    - Includes expiration_status ('expired', 'critical', 'warning', 'ok', 'fresh', 'none')
 
     Args:
         apply_depletion: Whether to calculate current depleted level
 
     Returns:
-        List of pantry items with status info
+        List of pantry items with status info including expiration data
     """
     ensure_initialized()
 
@@ -368,7 +594,8 @@ def get_pantry_status(apply_depletion: bool = True) -> List[Dict[str, Any]]:
         cursor = conn.execute("""
             SELECT product_id, description, level_percent,
                    last_restocked_at, last_updated_at,
-                   auto_deplete, daily_depletion_rate, low_threshold
+                   auto_deplete, daily_depletion_rate, low_threshold,
+                   expiration_date, days_to_expiration
             FROM pantry_items
             ORDER BY level_percent ASC
         """)
@@ -397,13 +624,18 @@ def get_pantry_status(apply_depletion: bool = True) -> List[Dict[str, Any]]:
             if item['daily_depletion_rate'] and item['daily_depletion_rate'] > 0:
                 days_until_empty = round(level / item['daily_depletion_rate'], 1)
 
-            # Determine status
+            # Determine inventory status
             if level <= 0:
                 status = 'out'
             elif level <= item['low_threshold']:
                 status = 'low'
             else:
                 status = 'ok'
+
+            # LAZY RECALCULATION: Always recalculate days_to_expiration for current date
+            exp_date = item['expiration_date']
+            days_to_exp = calculate_days_to_expiration(exp_date)
+            exp_status = get_expiration_status(days_to_exp)
 
             items.append({
                 'product_id': item['product_id'],
@@ -415,7 +647,11 @@ def get_pantry_status(apply_depletion: bool = True) -> List[Dict[str, Any]]:
                 'low_threshold': item['low_threshold'],
                 'auto_deplete': bool(item['auto_deplete']),
                 'daily_depletion_rate': round(item['daily_depletion_rate'], 2)
-                if item['daily_depletion_rate'] else 0
+                if item['daily_depletion_rate'] else 0,
+                # Expiration tracking (freshly calculated!)
+                'expiration_date': exp_date,
+                'days_to_expiration': days_to_exp,
+                'expiration_status': exp_status
             })
 
         return items

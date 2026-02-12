@@ -355,5 +355,110 @@ class TestComprehensiveRecommendations:
                 assert item['relevance_factors'].get('in_favorites') == True
 
 
+class TestExpirationScoring:
+    """Test expiration urgency integration into scoring algorithm."""
+
+    def test_scoring_expired_50_points(self):
+        """Expired items should add 50 urgency points."""
+        data = {'days_to_expiration': -3}
+        score, factors = calculate_recommendation_score(data)
+
+        assert factors['urgency']['expiration_urgency'] == 'expired'
+        assert factors['urgency']['days_past_expiration'] == 3
+        assert factors['urgency']['total_score'] >= 50
+        assert score >= 50
+
+    def test_scoring_expiration_critical_30_points(self):
+        """Critical expiration (0-2 days) should add 30 points."""
+        data = {'days_to_expiration': 1}
+        score, factors = calculate_recommendation_score(data)
+
+        assert factors['urgency']['expiration_urgency'] == 'critical'
+        assert factors['urgency']['total_score'] == 30
+        assert score >= 30
+
+    def test_scoring_expiration_warning_20_points(self):
+        """Warning expiration (3-6 days) should add 20 points."""
+        data = {'days_to_expiration': 5}
+        score, factors = calculate_recommendation_score(data)
+
+        assert factors['urgency']['expiration_urgency'] == 'warning'
+        assert factors['urgency']['total_score'] == 20
+        assert score >= 20
+
+    def test_scoring_expiration_soon_10_points(self):
+        """Soon expiration (7-13 days) should add 10 points."""
+        data = {'days_to_expiration': 10}
+        score, factors = calculate_recommendation_score(data)
+
+        assert factors['urgency']['expiration_urgency'] == 'soon'
+        assert factors['urgency']['total_score'] == 10
+        assert score >= 10
+
+    def test_scoring_expiration_and_pantry_stack(self):
+        """Expiration + pantry urgency should stack (max 90 points combined)."""
+        data = {
+            'days_to_expiration': -2,  # Expired: 50 points
+            'pantry_level': 5  # Critical: 40 points
+        }
+        score, factors = calculate_recommendation_score(data)
+
+        # Both should contribute
+        assert factors['urgency']['expiration_urgency'] == 'expired'
+        assert factors['urgency']['pantry_urgency'] == 'critical'
+        assert factors['urgency']['total_score'] == 90  # 50 + 40
+        assert score >= 90
+
+    def test_scoring_expiration_critical_and_low_pantry(self):
+        """Critical expiration + high pantry should stack."""
+        data = {
+            'days_to_expiration': 2,  # Critical: 30 points
+            'pantry_level': 20  # High: 30 points
+        }
+        score, factors = calculate_recommendation_score(data)
+
+        assert factors['urgency']['total_score'] == 60  # 30 + 30
+        assert score >= 60
+
+    def test_reason_summary_expired(self):
+        """Expired items should show in reason summary."""
+        data = {'days_to_expiration': -5}
+        _, factors = calculate_recommendation_score(data)
+
+        reason = _build_reason_summary(factors, data)
+        assert 'EXPIRED' in reason
+        assert '5 days ago' in reason
+
+    def test_reason_summary_expiring_critical(self):
+        """Critical expiration should show days remaining."""
+        data = {'days_to_expiration': 1}
+        _, factors = calculate_recommendation_score(data)
+
+        reason = _build_reason_summary(factors, data)
+        assert 'Expires in 1 days' in reason
+
+    def test_reason_summary_expiring_soon(self):
+        """Expiring soon should show days remaining."""
+        data = {'days_to_expiration': 5}
+        _, factors = calculate_recommendation_score(data)
+
+        reason = _build_reason_summary(factors, data)
+        assert 'Expiring soon (5 days)' in reason
+
+    def test_reason_summary_expiration_priority_over_pantry(self):
+        """Expiration should appear before pantry in reasons."""
+        data = {
+            'days_to_expiration': 2,
+            'pantry_level': 5
+        }
+        _, factors = calculate_recommendation_score(data)
+
+        reason = _build_reason_summary(factors, data)
+        # Expiration should come first
+        exp_index = reason.find('Expires')
+        pantry_index = reason.find('Critical pantry')
+        assert exp_index < pantry_index
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

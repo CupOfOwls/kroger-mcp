@@ -1299,3 +1299,270 @@ def register_tools(mcp):
                 "success": False,
                 "error": f"Failed to reset config: {str(e)}"
             }
+
+    # ========== Expiration Date Tools ==========
+
+    @mcp.tool()
+    async def set_expiration_dates(
+        product_id: str | List[str] = Field(...),
+        expiration_date: Optional[str] = Field(...),
+        ctx: Context = None
+    ) -> Dict[str, Any]:
+        """
+        Manually override auto-calculated expiration date(s) for pantry item(s).
+
+        NORMALLY NOT NEEDED - expiration dates are automatically calculated when
+        you mark orders as placed based on product category and purchase date.
+
+        USE THIS ONLY FOR:
+        - Correcting incorrect auto-calculated dates
+        - Items with non-standard shelf life (e.g., opened milk expires sooner)
+        - Clearing expiration for long-lasting items
+
+        SINGLE MODE:
+            set_expiration_dates(product_id="0001111041700", expiration_date="2026-03-15")
+
+        BATCH MODE:
+            set_expiration_dates(
+                product_id=["001", "002", "003"],
+                expiration_date="2026-03-15"
+            )
+
+        CLEAR EXPIRATION:
+            set_expiration_dates(product_id="001", expiration_date=null)
+
+        Args:
+            product_id: Product ID or list of IDs (max 50)
+            expiration_date: ISO date (YYYY-MM-DD) or null to clear
+
+        Returns:
+            Single mode: Flat response with success status
+            Batch mode: {results: {id: data}, summary: {...}}
+        """
+        # Normalize to list
+        ids = [product_id] if isinstance(product_id, str) else product_id
+        is_batch = len(ids) > 1
+
+        if len(ids) > 50:
+            return {
+                "success": False,
+                "error": "Maximum 50 products per batch request"
+            }
+
+        # Validate expiration_date format if provided
+        if expiration_date is not None:
+            try:
+                datetime.fromisoformat(expiration_date)
+            except (ValueError, TypeError):
+                return {
+                    "success": False,
+                    "error": f"Invalid date format. Use YYYY-MM-DD (e.g., '2026-03-15')"
+                }
+
+        try:
+            from ..analytics.database import get_db_connection, ensure_initialized
+            from ..analytics.pantry import calculate_days_to_expiration
+
+            ensure_initialized()
+
+            def set_expiration_for_product(pid: str) -> Dict[str, Any]:
+                """Set expiration date for a single product."""
+                conn = get_db_connection()
+                try:
+                    # Check if item exists in pantry
+                    cursor = conn.execute(
+                        "SELECT product_id, description FROM pantry_items WHERE product_id = ?",
+                        (pid,)
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        return {
+                            "success": False,
+                            "error": f"Product {pid} not in pantry. Add to pantry first."
+                        }
+
+                    description = row['description']
+
+                    # Calculate days_to_expiration
+                    days_to_exp = calculate_days_to_expiration(expiration_date)
+
+                    # Update expiration fields
+                    conn.execute("""
+                        UPDATE pantry_items
+                        SET expiration_date = ?,
+                            days_to_expiration = ?
+                        WHERE product_id = ?
+                    """, (expiration_date, days_to_exp, pid))
+                    conn.commit()
+
+                    return {
+                        "success": True,
+                        "product_id": pid,
+                        "description": description,
+                        "expiration_date": expiration_date,
+                        "days_to_expiration": days_to_exp,
+                        "message": f"Expiration date {'cleared' if not expiration_date else 'set'}"
+                    }
+                finally:
+                    conn.close()
+
+            # Process all products
+            results = {pid: set_expiration_for_product(pid) for pid in ids}
+
+            if is_batch:
+                success_count = sum(1 for r in results.values() if r.get('success'))
+                return {
+                    "success": True,
+                    "results": results,
+                    "summary": {
+                        "total": len(ids),
+                        "successful": success_count,
+                        "failed": len(ids) - success_count
+                    }
+                }
+            else:
+                # Single mode - return flat response
+                return results[ids[0]]
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to set expiration date: {str(e)}"
+            }
+
+    @mcp.tool()
+    async def get_pantry_attention(
+        days_ahead: int = Field(default=7, ge=1, le=30),
+        ctx: Context = None
+    ) -> Dict[str, Any]:
+        """
+        Get all items needing attention RIGHT NOW - expiring soon, running low, or overdue.
+
+        This is the unified "what do I need to deal with?" tool. Shows:
+        - Items expiring within the next N days
+        - Items with low inventory (below threshold)
+        - Items overdue for repurchase based on predictions
+
+        Results are sorted by urgency:
+        1. Expired items (URGENT - past expiration date)
+        2. Critical expiration (0-2 days until expiration)
+        3. Critical inventory (≤10% pantry level)
+        4. Expiring soon (3-7 days)
+        5. Low inventory (≤25% pantry level)
+        6. Overdue for reorder
+
+        Args:
+            days_ahead: How many days ahead to check for expiring items (1-30)
+
+        Returns:
+            Simple list of items needing attention, sorted by urgency
+        """
+        try:
+            from ..analytics.pantry import get_pantry_status
+            from ..analytics.predictions import predict_repurchase_date, get_predictions_for_period
+
+            # Get all pantry items with expiration status
+            pantry_items = get_pantry_status(apply_depletion=True)
+
+            # Get overdue predictions
+            overdue_predictions = get_predictions_for_period(
+                days_ahead=0,
+                min_confidence=0.5,
+                include_overdue=True
+            )
+            overdue_ids = {p.product_id: p for p in overdue_predictions if p.days_until is not None and p.days_until < 0}
+
+            attention_items = []
+
+            for item in pantry_items:
+                pid = item['product_id']
+                reasons = []
+                urgency_level = None
+                action = None
+
+                # Check expiration status
+                exp_status = item.get('expiration_status', 'none')
+                days_to_exp = item.get('days_to_expiration')
+
+                if exp_status == 'expired':
+                    reasons.append('expired')
+                    urgency_level = 'critical'
+                    action = f"Use immediately or discard - expired {abs(days_to_exp)} days ago"
+                elif exp_status == 'critical':
+                    reasons.append('expiring_critical')
+                    urgency_level = 'critical'
+                    action = f"Expires in {days_to_exp} days"
+                elif exp_status == 'warning' and days_to_exp <= days_ahead:
+                    reasons.append('expiring_soon')
+                    urgency_level = urgency_level or 'high'
+                    action = action or f"Expiring soon ({days_to_exp} days)"
+
+                # Check pantry level
+                level = item.get('level_percent', 100)
+                status = item.get('status', 'ok')
+
+                if level <= 10:
+                    reasons.append('critical_inventory')
+                    urgency_level = 'critical'
+                    days_until_empty = item.get('days_until_empty')
+                    action = action or f"Running critically low ({level}%) - reorder immediately"
+                elif level <= 25 and status == 'low':
+                    reasons.append('low_inventory')
+                    urgency_level = urgency_level or 'medium'
+                    action = action or f"Running low ({level}%) - reorder soon"
+
+                # Check if overdue for reorder
+                if pid in overdue_ids:
+                    pred = overdue_ids[pid]
+                    days_overdue = abs(pred.days_until)
+                    reasons.append('overdue')
+                    urgency_level = urgency_level or 'medium'
+                    action = action or f"Overdue by {days_overdue} days - time to repurchase"
+
+                # Only include items with attention needs
+                if reasons:
+                    # Determine primary reason (first one in list)
+                    primary_reason = reasons[0]
+
+                    attention_items.append({
+                        "product_id": pid,
+                        "description": item['description'],
+                        "attention_reason": primary_reason,
+                        "urgency_level": urgency_level,
+                        "details": {
+                            "expiration_date": item.get('expiration_date'),
+                            "days_to_expiration": days_to_exp,
+                            "pantry_level": level,
+                            "days_overdue": abs(overdue_ids[pid].days_until) if pid in overdue_ids else 0,
+                            "days_until_empty": item.get('days_until_empty')
+                        },
+                        "action": action
+                    })
+
+            # Sort by urgency (critical first, then high, then medium)
+            urgency_order = {'critical': 0, 'high': 1, 'medium': 2}
+            attention_items.sort(key=lambda x: urgency_order.get(x['urgency_level'], 3))
+
+            # Build summary
+            summary = {
+                "total_items": len(attention_items),
+                "expired": sum(1 for i in attention_items if i['attention_reason'] == 'expired'),
+                "expiring_critical": sum(1 for i in attention_items if i['attention_reason'] == 'expiring_critical'),
+                "expiring_soon": sum(1 for i in attention_items if i['attention_reason'] == 'expiring_soon'),
+                "critical_inventory": sum(1 for i in attention_items if i['attention_reason'] == 'critical_inventory'),
+                "low_inventory": sum(1 for i in attention_items if i['attention_reason'] == 'low_inventory'),
+                "overdue": sum(1 for i in attention_items if i['attention_reason'] == 'overdue')
+            }
+
+            return {
+                "success": True,
+                "items": attention_items,
+                "summary": summary,
+                "timestamp": datetime.now().isoformat()
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to get pantry attention items: {str(e)}"
+            }

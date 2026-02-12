@@ -28,10 +28,16 @@ def calculate_recommendation_score(
 
     Scoring Breakdown (0-100 points total):
 
-    1. URGENCY FACTORS (0-40 points):
-       - Pantry level ≤10%: 40 points (critical)
-       - Pantry level ≤25%: 30 points (high)
-       - Pantry level ≤40%: 20 points (medium)
+    1. URGENCY FACTORS (0-55 points):
+       - EXPIRATION URGENCY (0-50 points, stacks with pantry):
+         * Expired (< 0 days): 50 points
+         * Critical (0-2 days): 30 points
+         * Warning (3-6 days): 20 points
+         * Soon (7-13 days): 10 points
+       - PANTRY URGENCY (0-40 points):
+         * Pantry level ≤10%: 40 points (critical)
+         * Pantry level ≤25%: 30 points (high)
+         * Pantry level ≤40%: 20 points (medium)
        - Overdue predicted repurchase: +1 point per day overdue (max 15)
 
     2. DEAL QUALITY (0-25 points):
@@ -66,10 +72,30 @@ def calculate_recommendation_score(
         "timing": {}
     }
 
-    # 1. URGENCY FACTORS (0-40 points)
+    # 1. URGENCY FACTORS (0-55 points max, expiration + pantry can stack)
     urgency_score = 0
-    pantry_level = product_data.get('pantry_level')
 
+    # EXPIRATION URGENCY (0-50 points, takes precedence)
+    days_to_exp = product_data.get('days_to_expiration')
+    if days_to_exp is not None:
+        if days_to_exp < 0:
+            urgency_score += 50
+            factors["urgency"]["expiration_urgency"] = "expired"
+            factors["urgency"]["days_past_expiration"] = abs(days_to_exp)
+        elif days_to_exp <= 2:
+            urgency_score += 30
+            factors["urgency"]["expiration_urgency"] = "critical"
+        elif days_to_exp <= 6:
+            urgency_score += 20
+            factors["urgency"]["expiration_urgency"] = "warning"
+        elif days_to_exp <= 13:
+            urgency_score += 10
+            factors["urgency"]["expiration_urgency"] = "soon"
+
+        factors["urgency"]["days_to_expiration"] = days_to_exp
+
+    # PANTRY URGENCY (0-40 points, can stack with expiration)
+    pantry_level = product_data.get('pantry_level')
     if pantry_level is not None:
         if pantry_level <= 10:
             urgency_score += 40
@@ -263,7 +289,9 @@ def get_comprehensive_recommendations(
                 ps.detected_category,
                 ps.purchase_frequency_score,
                 pi.level_percent as pantry_level,
-                pi.daily_depletion_rate
+                pi.daily_depletion_rate,
+                pi.expiration_date,
+                pi.days_to_expiration
             FROM product_statistics ps
             LEFT JOIN products p ON ps.product_id = p.product_id
             LEFT JOIN pantry_items pi ON ps.product_id = pi.product_id
@@ -299,6 +327,13 @@ def get_comprehensive_recommendations(
                 'pantry_level': row['pantry_level'],
                 'in_favorites': product_id in favorite_ids
             }
+
+            # Add expiration data with fresh calculation
+            from .pantry import calculate_days_to_expiration
+            exp_date = row['expiration_date']
+            days_to_exp = calculate_days_to_expiration(exp_date)  # Recalc fresh
+            product_data['expiration_date'] = exp_date
+            product_data['days_to_expiration'] = days_to_exp
 
             # Calculate last purchase days ago
             if row['last_purchase_date']:
@@ -482,8 +517,22 @@ def _build_reason_summary(factors: Dict[str, Any], product_data: Dict[str, Any])
     """
     reasons = []
 
-    # Urgency reasons
+    # Urgency reasons - EXPIRATION takes precedence
     urgency = factors.get('urgency', {})
+
+    # Expiration urgency (show first if present)
+    exp_urgency = urgency.get('expiration_urgency')
+    if exp_urgency == 'expired':
+        days = urgency.get('days_past_expiration', 0)
+        reasons.append(f"EXPIRED {days} days ago")
+    elif exp_urgency == 'critical':
+        days = product_data.get('days_to_expiration', 0)
+        reasons.append(f"Expires in {days} days")
+    elif exp_urgency in ['warning', 'soon']:
+        days = product_data.get('days_to_expiration', 0)
+        reasons.append(f"Expiring soon ({days} days)")
+
+    # Pantry urgency
     if urgency.get('pantry_urgency') == 'critical':
         level = product_data.get('pantry_level', 0)
         reasons.append(f"Critical pantry level ({level}%)")
