@@ -124,6 +124,13 @@ def _add_item_to_local_cart(product_id: str, quantity: int, modality: str, produ
         except Exception:
             pass  # Don't fail cart operations if price recording fails
 
+    # Auto-add to pantry for inventory tracking
+    try:
+        from ..analytics.pantry import add_to_pantry
+        add_to_pantry(product_id=product_id)
+    except Exception:
+        pass  # Don't fail cart operations if pantry add fails
+
 
 def register_tools(mcp):
     """Register cart-related tools with the FastMCP server"""
