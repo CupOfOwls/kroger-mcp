@@ -10,12 +10,12 @@ Integrates all available data sources for intelligent shopping suggestions:
 - Seasonal patterns (timing optimization)
 """
 
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+from typing import Any, Dict, Optional, Tuple
 import statistics
 
 from .database import get_db_connection, ensure_initialized
-from .predictions import predict_repurchase_date, get_product_statistics
+from .predictions import predict_repurchase_date
 from .favorites import get_all_favorite_product_ids
 from .deals import get_price_statistics
 
