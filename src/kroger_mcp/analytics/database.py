@@ -324,6 +324,33 @@ def initialize_database() -> None:
                 FOREIGN KEY (product_id) REFERENCES products(product_id)
             );
 
+            -- Custom ingredients (user-added ingredients beyond defaults)
+            CREATE TABLE IF NOT EXISTS custom_ingredients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ingredient_name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                severity TEXT NOT NULL CHECK(severity IN ('critical', 'warning', 'watch')),
+                category TEXT,
+                reason TEXT,
+                aliases TEXT,  -- JSON array of alternative names
+                source TEXT DEFAULT 'user' CHECK(source IN ('user', 'imported', 'system')),
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                modified_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                is_active INTEGER DEFAULT 1 CHECK(is_active IN (0, 1)),
+                notes TEXT
+            );
+
+            -- Ingredient overrides (modify default/hardcoded ingredients)
+            CREATE TABLE IF NOT EXISTS ingredient_overrides (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ingredient_name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                override_severity TEXT CHECK(override_severity IN ('critical', 'warning', 'watch')),
+                override_reason TEXT,
+                additional_aliases TEXT,  -- JSON array of extra aliases
+                is_hidden INTEGER DEFAULT 0 CHECK(is_hidden IN (0, 1)),
+                modified_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                notes TEXT
+            );
+
             -- Create default favorites list
             INSERT OR IGNORE INTO favorite_lists (id, name, description, list_type)
             VALUES ('default', 'My Favorites', 'Default favorites list', 'custom');
@@ -347,6 +374,16 @@ def initialize_database() -> None:
                 ON seasonal_patterns(product_id);
             CREATE INDEX IF NOT EXISTS idx_products_category
                 ON products(category_type);
+            CREATE INDEX IF NOT EXISTS idx_custom_ingredients_name
+                ON custom_ingredients(ingredient_name COLLATE NOCASE);
+            CREATE INDEX IF NOT EXISTS idx_custom_ingredients_severity
+                ON custom_ingredients(severity);
+            CREATE INDEX IF NOT EXISTS idx_custom_ingredients_active
+                ON custom_ingredients(is_active);
+            CREATE INDEX IF NOT EXISTS idx_ingredient_overrides_name
+                ON ingredient_overrides(ingredient_name COLLATE NOCASE);
+            CREATE INDEX IF NOT EXISTS idx_ingredient_overrides_hidden
+                ON ingredient_overrides(is_hidden);
             CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_recipe
                 ON recipe_ingredients(recipe_id);
             CREATE INDEX IF NOT EXISTS idx_pantry_items_product

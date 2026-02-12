@@ -8,14 +8,15 @@ from fastmcp import Context
 from datetime import datetime, timedelta
 
 from .shared import get_client_credentials_client, get_preferred_location_id
-from .product_tools import search_products, get_product_details
+# Note: search_products and get_product_details are MCP tools and can't be imported
+# We'll use the API client directly for deal searches
 from ..analytics.deals import (
     get_price_statistics,
     score_deal_quality,
 )
 from ..analytics.database import get_db_cursor, get_db_connection
 from ..analytics.favorites import get_all_favorite_product_ids
-from ..analytics.pantry import get_low_pantry_items
+from ..analytics.pantry import get_low_inventory_items
 from ..analytics.statistics import get_recent_purchases
 
 
@@ -113,7 +114,7 @@ def register_tools(mcp):
         # Get pantry items for cross-reference
         pantry_items = {}
         try:
-            low_items = get_low_pantry_items(threshold=50)
+            low_items = get_low_inventory_items(threshold=50)
             pantry_items = {item["product_id"]: item for item in low_items}
         except Exception:
             pass
@@ -124,18 +125,18 @@ def register_tools(mcp):
 
         for query in search_queries:
             try:
-                # Search products
-                result = await search_products(
-                    search_term=query,
+                # Search products using API client directly
+                client = get_client_credentials_client()
+                search_response = client.search_products(
+                    term=query,
                     location_id=location_id,
                     limit=50,
-                    ctx=ctx,
                 )
 
-                if not result.get("success"):
+                if not search_response or "data" not in search_response:
                     continue
 
-                products = result.get("data", [])
+                products = search_response.get("data", [])
 
                 # Filter to deals only
                 for product in products:
@@ -280,15 +281,17 @@ def register_tools(mcp):
 
         if location_id:
             try:
-                product = await get_product_details(
-                    product_id=product_id, location_id=location_id, ctx=ctx
+                client = get_client_credentials_client()
+                product_response = client.get_product(
+                    product_id=product_id, location_id=location_id
                 )
-                if product.get("success"):
-                    pricing = product.get("data", {}).get("pricing", {})
+                if product_response and "data" in product_response:
+                    product_data = product_response.get("data", {})
+                    pricing = product_data.get("pricing", {})
                     current_price = pricing.get("sale_price") or pricing.get("regular_price")
                     current_on_sale = pricing.get("on_sale", False)
                     if not description:
-                        description = product.get("data", {}).get("description")
+                        description = product_data.get("description")
             except Exception:
                 pass
 
@@ -402,11 +405,12 @@ def register_tools(mcp):
         description = None
         try:
             if location_id:
-                product = await get_product_details(
-                    product_id=product_id, location_id=location_id, ctx=ctx
+                client = get_client_credentials_client()
+                product_response = client.get_product(
+                    product_id=product_id, location_id=location_id
                 )
-                if product.get("success"):
-                    description = product.get("data", {}).get("description")
+                if product_response and "data" in product_response:
+                    description = product_response.get("data", {}).get("description")
         except Exception:
             pass
 
@@ -523,7 +527,7 @@ def register_tools(mcp):
         # 3. Low pantry items
         if include_pantry:
             try:
-                low_items = get_low_pantry_items(threshold=25)
+                low_items = get_low_inventory_items(threshold=25)
                 for item in low_items:
                     product_id = item["product_id"]
                     if not any(w["product_id"] == product_id for w in watchlist):
@@ -569,14 +573,15 @@ def register_tools(mcp):
         deals = []
         for item in watchlist:
             try:
-                product = await get_product_details(
-                    product_id=item["product_id"], location_id=location_id, ctx=None
+                client = get_client_credentials_client()
+                product_response = client.get_product(
+                    product_id=item["product_id"], location_id=location_id
                 )
 
-                if not product.get("success"):
+                if not product_response or "data" not in product_response:
                     continue
 
-                data = product.get("data", {})
+                data = product_response.get("data", {})
                 pricing = data.get("pricing", {})
 
                 if not pricing.get("on_sale"):

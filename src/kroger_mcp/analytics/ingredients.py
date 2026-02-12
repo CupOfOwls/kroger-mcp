@@ -691,15 +691,19 @@ def check_product_safety(
     brand: Optional[str] = None,
     categories: Optional[List[str]] = None,
     disabled_ingredients: Optional[set] = None,
+    force_refresh_patterns: bool = False,
 ) -> SafetyResult:
     """
     Check a product for bad ingredients based on its description.
+
+    Now uses get_compiled_patterns() which includes custom ingredients.
 
     Args:
         description: Product description/name to scan
         brand: Brand name (not scanned to avoid false positives)
         categories: Product categories (for context, not currently used)
         disabled_ingredients: Set of ingredient keys to skip
+        force_refresh_patterns: Force pattern cache refresh (used after ingredient changes)
 
     Returns:
         SafetyResult with all matched ingredients
@@ -711,33 +715,48 @@ def check_product_safety(
     matches: List[IngredientMatch] = []
     disabled = disabled_ingredients or set()
 
+    # Get patterns (cached, includes custom ingredients)
+    pattern_data = get_compiled_patterns(force_refresh=force_refresh_patterns)
+    patterns = pattern_data["patterns"]
+
+    # Check for exclusions from hardcoded ingredients
+    exclusions_map = {}
     for ingredient in BAD_INGREDIENTS:
+        if ingredient.exclude_patterns:
+            exclusions_map[ingredient.key] = ingredient.exclude_patterns
+
+    for pattern_info in patterns:
         # Skip if user disabled this ingredient check
-        if ingredient.key in disabled:
+        if pattern_info["key"] in disabled:
             continue
 
-        pattern = _INGREDIENT_PATTERNS.get(ingredient.key)
-        if not pattern:
-            continue
-
+        pattern = pattern_info["pattern"]
         match = pattern.search(text)
         if match:
-            # Check exclusion patterns
-            if ingredient.exclude_patterns:
+            # Check exclusion patterns (from hardcoded ingredients)
+            if pattern_info["key"] in exclusions_map:
                 skip = False
-                for excl in ingredient.exclude_patterns:
+                for excl in exclusions_map[pattern_info["key"]]:
                     if excl.lower() in text:
                         skip = True
                         break
                 if skip:
                     continue
 
+            # Map severity string to Severity enum
+            severity_map = {
+                "critical": Severity.CRITICAL,
+                "warning": Severity.WARNING,
+                "watch": Severity.WATCH
+            }
+            severity = severity_map.get(pattern_info["severity"], Severity.WATCH)
+
             matches.append(IngredientMatch(
-                ingredient_key=ingredient.key,
-                ingredient_name=ingredient.name,
-                severity=ingredient.severity,
-                reason=ingredient.reason,
-                category=ingredient.category,
+                ingredient_key=pattern_info["key"],
+                ingredient_name=pattern_info["name"],
+                severity=severity,
+                reason=pattern_info["reason"],
+                category=pattern_info["category"],
                 matched_text=match.group(0),
             ))
 
@@ -815,3 +834,152 @@ def get_ingredients_by_category(category: str) -> List[Dict[str, Any]]:
 def get_categories() -> List[str]:
     """Get all unique ingredient categories."""
     return sorted(set(ing.category for ing in BAD_INGREDIENTS))
+
+
+# ==================== DYNAMIC INGREDIENT MANAGEMENT ====================
+
+# Module-level cache for compiled patterns
+_pattern_cache = None
+_pattern_cache_timestamp = None
+_CACHE_TTL = 300  # 5 minutes
+
+
+def get_active_ingredients(include_custom: bool = True) -> List[Dict[str, Any]]:
+    """
+    Get all active ingredients from hardcoded + custom + overrides.
+
+    Algorithm:
+    1. Start with BAD_INGREDIENTS (system defaults)
+    2. Apply ingredient_overrides (severity changes, hiding)
+    3. Add custom_ingredients where is_active=1
+    4. Filter out hidden ingredients
+    5. Merge duplicate entries (custom can override system)
+
+    Returns unified list with all active ingredients.
+    """
+    from kroger_mcp.analytics.database import get_db_connection
+    import json
+
+    # Start with system defaults
+    ingredients = []
+    for ing in BAD_INGREDIENTS:
+        ingredients.append({
+            "name": ing.name,
+            "severity": ing.severity.value,
+            "category": ing.category,
+            "reason": ing.reason,
+            "aliases": list(ing.aliases),
+            "source": "system",
+            "key": ing.key,
+        })
+
+    # Apply overrides to system ingredients
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute("""
+            SELECT ingredient_name, override_severity, override_reason,
+                   additional_aliases, is_hidden
+            FROM ingredient_overrides
+        """)
+        overrides = {row["ingredient_name"].lower(): row for row in cursor.fetchall()}
+
+        # Filter out hidden ingredients and apply overrides
+        filtered_ingredients = []
+        for ing in ingredients:
+            override = overrides.get(ing["name"].lower())
+            if override and override["is_hidden"]:
+                continue  # Skip hidden ingredients
+
+            if override:
+                if override["override_severity"]:
+                    ing["severity"] = override["override_severity"]
+                if override["override_reason"]:
+                    ing["reason"] = override["override_reason"]
+                if override["additional_aliases"]:
+                    try:
+                        extra = json.loads(override["additional_aliases"])
+                        ing["aliases"].extend(extra)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+            filtered_ingredients.append(ing)
+
+        ingredients = filtered_ingredients
+
+        # Add custom ingredients if requested
+        if include_custom:
+            cursor = conn.execute("""
+                SELECT ingredient_name, severity, category, reason, aliases
+                FROM custom_ingredients
+                WHERE is_active = 1
+            """)
+
+            for row in cursor.fetchall():
+                aliases = []
+                if row["aliases"]:
+                    try:
+                        aliases = json.loads(row["aliases"])
+                    except (json.JSONDecodeError, TypeError):
+                        aliases = []
+
+                ingredients.append({
+                    "name": row["ingredient_name"],
+                    "severity": row["severity"],
+                    "category": row["category"] or "",
+                    "reason": row["reason"] or "",
+                    "aliases": aliases,
+                    "source": "custom",
+                    "key": f"custom_{row['ingredient_name'].lower().replace(' ', '_')}",
+                })
+
+    finally:
+        conn.close()
+
+    return ingredients
+
+
+def get_compiled_patterns(force_refresh: bool = False) -> Dict[str, Any]:
+    """
+    Get compiled regex patterns with caching.
+
+    Patterns are cached for 5 minutes. Use force_refresh=True to rebuild
+    immediately after ingredient changes.
+    """
+    global _pattern_cache, _pattern_cache_timestamp
+
+    # Check cache validity
+    if not force_refresh and _pattern_cache is not None:
+        from datetime import datetime, timedelta
+        if _pattern_cache_timestamp:
+            cache_age = (datetime.now() - _pattern_cache_timestamp).total_seconds()
+            if cache_age < _CACHE_TTL:
+                return _pattern_cache
+
+    # Rebuild patterns
+    from datetime import datetime
+
+    ingredients = get_active_ingredients()
+    patterns = []
+
+    for ing in ingredients:
+        all_names = [ing["name"]] + ing["aliases"]
+        for name in all_names:
+            escaped = re.escape(name)
+            pattern = re.compile(r'\b' + escaped + r'\b', re.IGNORECASE)
+            patterns.append({
+                "pattern": pattern,
+                "severity": ing["severity"],
+                "name": ing["name"],
+                "reason": ing["reason"],
+                "category": ing["category"],
+                "key": ing.get("key", ing["name"].lower().replace(" ", "_"))
+            })
+
+    _pattern_cache = {
+        "patterns": patterns,
+        "timestamp": datetime.now().isoformat(),
+        "ingredient_count": len(ingredients)
+    }
+    _pattern_cache_timestamp = datetime.now()
+
+    return _pattern_cache

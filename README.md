@@ -151,7 +151,7 @@ fastmcp dev server.py --with-editable .
 
 ## 🛠️ Features
 
-This MCP server provides **97 tools** across 15 modules:
+This MCP server provides **110 tools** across 16 modules:
 - **Core Shopping**: Locations, products, cart management
 - **Smart Analytics**: Purchase predictions, consumption patterns, seasonal awareness
 - **Deal Discovery**: Automatic price tracking, deal search, price history, watchlist monitoring, background scanning
@@ -161,6 +161,7 @@ This MCP server provides **97 tools** across 15 modules:
 - **Favorite Lists**: Named shopping lists (Weekly Staples, Party Supplies, etc.)
 - **Reporting**: Spending analysis, pattern reports, data export
 - **Health-Optimized Shopping**: Ingredient safety filtering for cancer prevention, metabolic health, microbiome optimization, and avoiding ultra-processed foods
+- **Dynamic Ingredient Management** ⭐ NEW: Fully customize ingredient filter - add custom ingredients, override system settings, import/export lists
 
 ### 🎯 Highlight Features
 

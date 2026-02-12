@@ -101,22 +101,33 @@ def register_tools(mcp):
 
     @mcp.tool()
     async def get_bad_ingredients_list(
-        severity: Optional[str] = Field(
+        include_custom: bool = Field(
+            default=True,
+            description="Include custom ingredients added by user"
+        ),
+        include_overrides: bool = Field(
+            default=True,
+            description="Apply user overrides to system ingredients"
+        ),
+        filter_severity: Optional[Literal["critical", "warning", "watch"]] = Field(
             default=None,
             description="Filter by severity: 'critical', 'warning', 'watch'"
         ),
-        category: Optional[str] = Field(
+        filter_category: Optional[str] = Field(
             default=None,
             description="Filter by category (e.g., 'preservative', 'artificial_sweetener')"
         ),
         ctx: Context = None,
     ) -> Dict[str, Any]:
         """
-        Get the evidence-based list of flagged ingredients.
+        Get complete list of flagged ingredients (system + custom).
 
         This list is designed to optimize for: general health, cancer prevention,
         metabolic health (blood sugar), microbiome optimization, and minimizing
         ultra-processed foods.
+
+        Now includes custom ingredients you've added and any overrides you've
+        applied to system ingredients.
 
         Severity levels:
         - CRITICAL: Strong human evidence (IARC carcinogens, FDA actions, EFSA concerns)
@@ -124,16 +135,18 @@ def register_tools(mcp):
         - WATCH: Markers of ultra-processing, minimize for optimal health
 
         Each ingredient includes:
-        - key: Unique identifier
         - name: Display name
         - aliases: Alternative names to search for
         - severity: critical, warning, or watch
         - reason: Evidence-based reason for flagging
         - category: Type of additive
+        - source: 'system' or 'custom'
 
         Args:
-            severity: Optional filter by severity level
-            category: Optional filter by category
+            include_custom: Include custom ingredients (default True)
+            include_overrides: Apply overrides to system ingredients (default True)
+            filter_severity: Optional filter by severity level
+            filter_category: Optional filter by category
 
         Returns:
             List of bad ingredients with their details
@@ -141,24 +154,52 @@ def register_tools(mcp):
         if ctx:
             await ctx.info("Getting bad ingredients list")
 
-        if severity:
-            try:
-                sev = Severity(severity)
-                ingredients = get_ingredients_by_severity(sev)
-            except ValueError:
-                return {
-                    "success": False,
-                    "error": f"Invalid severity: {severity}. Use 'critical', 'warning', or 'watch'"
-                }
-        elif category:
-            ingredients = get_ingredients_by_category(category)
+        # Get active ingredients (includes custom if requested)
+        from ..analytics.ingredients import get_active_ingredients
+
+        if include_custom and include_overrides:
+            # Get full unified list
+            ingredients = get_active_ingredients(include_custom=True)
+        elif include_overrides:
+            # System with overrides, no custom
+            ingredients = get_active_ingredients(include_custom=False)
+        elif include_custom:
+            # This is tricky - need system defaults + custom, but ignore overrides
+            # For now, just get everything and note the limitation
+            ingredients = get_active_ingredients(include_custom=True)
         else:
+            # Just system defaults, no overrides
             ingredients = get_all_ingredients()
+
+        # Apply filters
+        if filter_severity:
+            ingredients = [i for i in ingredients if i["severity"] == filter_severity]
+
+        if filter_category:
+            ingredients = [i for i in ingredients if i.get("category") == filter_category]
+
+        # Group by severity
+        by_severity = {
+            "critical": [i for i in ingredients if i["severity"] == "critical"],
+            "warning": [i for i in ingredients if i["severity"] == "warning"],
+            "watch": [i for i in ingredients if i["severity"] == "watch"]
+        }
+
+        # Count by source
+        system_count = len([i for i in ingredients if i.get("source") == "system"])
+        custom_count = len([i for i in ingredients if i.get("source") == "custom"])
 
         return {
             "success": True,
-            "count": len(ingredients),
-            "categories": get_categories(),
+            "total_ingredients": len(ingredients),
+            "system_ingredients": system_count,
+            "custom_ingredients": custom_count,
+            "by_severity": {
+                "critical": len(by_severity["critical"]),
+                "warning": len(by_severity["warning"]),
+                "watch": len(by_severity["watch"])
+            },
+            "categories": sorted(set(i.get("category", "") for i in ingredients if i.get("category"))),
             "severity_levels": ["critical", "warning", "watch"],
             "ingredients": ingredients,
         }

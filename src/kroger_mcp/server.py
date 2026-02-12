@@ -34,6 +34,7 @@ from .tools import meal_planner_tools
 from .tools import safety_tools
 from .tools import deal_tools
 from .tools import whole_foods_tools
+from .tools import ingredient_management_tools
 
 # Import prompts
 from . import prompts
@@ -72,6 +73,19 @@ def create_server() -> FastMCP:
         - get_bad_ingredients_list - View 62+ flagged ingredients with severity levels
         - configure_safety_settings - Enable/disable filtering, set block mode
         - approve_product / block_product - Manage personal safe/blocked lists
+
+        Dynamic Ingredient Management:
+        Users can now fully customize the ingredient filter beyond the default 62:
+        - add_custom_ingredient - Add your own ingredients to flag
+        - edit_custom_ingredient - Modify custom ingredients
+        - remove_custom_ingredient - Remove custom ingredients
+        - list_custom_ingredients - View all custom ingredients
+        - override_system_ingredient - Change default ingredient settings
+        - reset_ingredient_to_default - Restore system defaults
+        - import_ingredient_list / export_ingredient_list - Share ingredient lists
+        - preview_ingredient_impact - See impact before adding
+        - get_ingredient_info - Get detailed ingredient information
+        All changes take effect immediately (no restart needed).
 
         Deal Discovery & Price Tracking:
         The server automatically tracks prices during searches and provides:
@@ -138,6 +152,7 @@ def create_server() -> FastMCP:
     safety_tools.register_tools(mcp)
     deal_tools.register_tools(mcp)
     whole_foods_tools.register_tools(mcp)
+    ingredient_management_tools.register_tools(mcp)
 
     # Register prompts
     prompts.register_prompts(mcp)
