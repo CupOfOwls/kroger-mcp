@@ -515,6 +515,125 @@ def register_tools(mcp):
             }
 
     @mcp.tool()
+    async def get_smart_shopping_recommendations(
+        days_ahead: int = Field(default=14, ge=1, le=60,
+            description="Look ahead window for predictions (1-60 days)"),
+        include_low_pantry: bool = Field(default=True,
+            description="Include items with low inventory levels"),
+        include_deals: bool = Field(default=True,
+            description="Prioritize items currently on sale"),
+        include_predictions: bool = Field(default=True,
+            description="Include consumption-based predictions"),
+        include_favorites_only: bool = Field(default=False,
+            description="Only recommend items in favorite lists"),
+        min_score: int = Field(default=20, ge=0, le=100,
+            description="Filter out items below this score (0-100)"),
+        max_results: int = Field(default=50, ge=1, le=100,
+            description="Maximum recommendations to return (1-100)"),
+        ctx: Context = None
+    ) -> Dict[str, Any]:
+        """
+        Generate smart shopping recommendations integrating ALL available data.
+
+        This is the most comprehensive recommendation tool, combining:
+
+        1. URGENCY SIGNALS (Critical Needs):
+           - Pantry items running critically low (< 10%)
+           - Items below low inventory threshold
+           - Overdue predicted repurchases
+           - Items you're about to run out of
+
+        2. SAVINGS OPPORTUNITIES (Deal Intelligence):
+           - Current deals and promotional sales
+           - Items at or near 30-day lowest price
+           - High-value discounts on frequently purchased items
+           - Best time to buy based on price history
+
+        3. RELEVANCE INDICATORS (Personal Preferences):
+           - Items in your favorite lists
+           - Frequently purchased items (high consumption rate)
+           - Items matching your purchase patterns
+           - Recently purchased items (continuity)
+
+        4. TIMING OPTIMIZATION (Purchase Windows):
+           - Items predicted to need repurchase within specified window
+           - Seasonal items approaching their season
+           - Items on recurring schedules (from favorites)
+
+        SCORING SYSTEM:
+        Each recommendation receives 0-100 points from multiple factors:
+        - Urgency: pantry depletion (40 pts) + overdue status (15 pts)
+        - Deals: savings percentage (25 pts) + price history (10 pts)
+        - Relevance: favorites (10 pts) + frequency (10 pts) + recency (5 pts)
+        - Timing: purchase window (10 pts) + seasonal (5 pts)
+
+        PRIORITY TIERS (based on score):
+        - Urgent (80-100): Immediate action needed
+        - High Value (60-79): Great deals on relevant items
+        - Good Timing (40-59): Optimal purchase window
+        - Nice to Have (20-39): Lower priority suggestions
+        - Optional (0-19): Minimal relevance (filtered by min_score)
+
+        OUTPUT STRUCTURE:
+        Recommendations are grouped by priority tier with full context:
+        - Overall recommendation score
+        - Factor breakdown (why it's recommended)
+        - Pantry status (if tracked)
+        - Current pricing and deal quality
+        - Purchase prediction and timing
+        - Historical purchase stats
+
+        EXAMPLE USE CASES:
+        1. "What should I buy this week?" → Default params
+        2. "Show me urgent needs only" → min_score=80
+        3. "What deals should I get from my favorites?" →
+           include_favorites_only=True, include_deals=True
+        4. "Show me everything running low" →
+           include_low_pantry=True, min_score=30
+
+        Args:
+            days_ahead: Look ahead window for predictions (1-60 days)
+            include_low_pantry: Include items with low inventory levels
+            include_deals: Prioritize items currently on sale
+            include_predictions: Include consumption-based predictions
+            include_favorites_only: Only recommend items in favorite lists
+            min_score: Filter out items below this score (0-100)
+            max_results: Maximum recommendations to return (1-100)
+
+        Returns:
+            Prioritized recommendations grouped by tier with comprehensive data
+        """
+        try:
+            from ..analytics.recommendations import get_comprehensive_recommendations
+
+            # Get user's preferred location for deal context
+            location_id = None
+            try:
+                from ..storage import get_preferred_location
+                location = get_preferred_location()
+                if location:
+                    location_id = location.get('location_id')
+            except Exception:
+                pass  # Location is optional
+
+            return get_comprehensive_recommendations(
+                days_ahead=days_ahead,
+                include_low_pantry=include_low_pantry,
+                include_deals=include_deals,
+                include_predictions=include_predictions,
+                include_favorites_only=include_favorites_only,
+                min_score=min_score,
+                max_results=max_results,
+                location_id=location_id
+            )
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to get smart recommendations: {str(e)}"
+            }
+
+    @mcp.tool()
     async def get_seasonal_items(
         days_ahead: int = Field(
             default=30, ge=1, le=90,

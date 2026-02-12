@@ -322,6 +322,16 @@ def register_tools(mcp):
                 {"product_id": "0001111089476", "quantity": 1, "modality": "DELIVERY"}
             ])
 
+        AUTOMATIC PANTRY TRACKING:
+        When items are added to cart, they are automatically added to pantry
+        inventory tracking (if not already tracked). This enables:
+        - Automatic consumption rate learning based on purchase intervals
+        - Low inventory alerts when items run low
+        - Smart reorder suggestions based on actual usage patterns
+
+        The system tracks depletion rates by analyzing your purchase frequency.
+        View pantry status with get_pantry() or get_shopping_context().
+
         CONFIRMATION WORKFLOW (recommended for batch):
         Step 1: Call with preview_only=True
             - Returns what WOULD be added with pantry context
@@ -740,12 +750,23 @@ def register_tools(mcp):
         """
         Mark the current cart as an order that has been placed and move it to order history.
         Use this after you've completed checkout on the Kroger website/app.
-        
+
+        AUTOMATIC PANTRY RESTOCKING:
+        When an order is marked as placed, all items that are tracked in the
+        pantry system are automatically restocked to 100% level. This:
+        - Resets inventory levels for newly purchased items
+        - Starts a new depletion cycle for consumption tracking
+        - Updates predicted reorder dates based on actual purchase timing
+        - Improves future predictions by learning from actual intervals
+
+        Only items already in pantry tracking are restocked. New items are
+        added when first added to cart.
+
         Args:
             order_notes: Optional notes about the order
-        
+
         Returns:
-            Dictionary confirming the order was recorded
+            Dictionary confirming the order was recorded and pantry restocking status
         """
         try:
             cart_data = _load_cart_data()

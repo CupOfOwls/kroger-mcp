@@ -120,6 +120,13 @@ def create_server() -> FastMCP:
         9. Get purchase predictions with get_purchase_predictions
         10. Generate smart shopping lists with get_shopping_suggestions
 
+        Automatic Pantry Integration:
+        The system seamlessly tracks inventory for all items you purchase:
+        - add_to_cart() → Automatically begins tracking items in pantry
+        - mark_order_placed() → Automatically restocks tracked items to 100%
+        This hands-free system learns your consumption patterns and enables
+        predictive reordering without manual inventory management.
+
         Authentication Flow:
         1. Use start_authentication to get an authorization URL
         2. Open the URL in your browser and authorize the application
