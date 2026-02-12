@@ -292,6 +292,38 @@ def initialize_database() -> None:
                 FOREIGN KEY (product_id) REFERENCES products(product_id)
             );
 
+            -- Whole foods catalog (curated list of clean/natural foods)
+            CREATE TABLE IF NOT EXISTS whole_foods_catalog (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id TEXT NOT NULL,
+                description TEXT,
+                brand TEXT,
+                added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                added_by TEXT DEFAULT 'auto',
+                safety_status TEXT,
+                ingredient_count INTEGER,
+                processing_level TEXT,
+                notes TEXT,
+                last_verified_at TEXT,
+                is_currently_available INTEGER DEFAULT 1,
+                FOREIGN KEY (product_id) REFERENCES products(product_id),
+                UNIQUE(product_id)
+            );
+
+            -- Background scan results (deals found during automated scans)
+            CREATE TABLE IF NOT EXISTS deal_scan_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id TEXT NOT NULL,
+                description TEXT,
+                regular_price REAL,
+                sale_price REAL,
+                savings_amount REAL,
+                scan_date TEXT NOT NULL,
+                scan_time TEXT NOT NULL,
+                viewed INTEGER DEFAULT 0,
+                FOREIGN KEY (product_id) REFERENCES products(product_id)
+            );
+
             -- Create default favorites list
             INSERT OR IGNORE INTO favorite_lists (id, name, description, list_type)
             VALUES ('default', 'My Favorites', 'Default favorites list', 'custom');
@@ -347,6 +379,14 @@ def initialize_database() -> None:
                 ON price_history(product_id, observed_at DESC);
             CREATE INDEX IF NOT EXISTS idx_watchlist_priority
                 ON deal_watchlist(priority DESC, last_checked_at ASC);
+            CREATE INDEX IF NOT EXISTS idx_whole_foods_catalog_product
+                ON whole_foods_catalog(product_id);
+            CREATE INDEX IF NOT EXISTS idx_whole_foods_catalog_available
+                ON whole_foods_catalog(is_currently_available);
+            CREATE INDEX IF NOT EXISTS idx_deal_scan_results_date
+                ON deal_scan_results(scan_date DESC);
+            CREATE INDEX IF NOT EXISTS idx_deal_scan_results_viewed
+                ON deal_scan_results(viewed);
         """)
         conn.commit()
     finally:
@@ -400,7 +440,8 @@ def get_table_counts() -> dict:
                       'meal_plans', 'meal_entries',
                       'safe_products', 'blocked_products',
                       'ingredient_preferences', 'safety_settings',
-                      'price_history', 'deal_watchlist']:
+                      'price_history', 'deal_watchlist',
+                      'whole_foods_catalog', 'deal_scan_results']:
             cursor = conn.execute(f"SELECT COUNT(*) FROM {table}")
             counts[table] = cursor.fetchone()[0]
         return counts

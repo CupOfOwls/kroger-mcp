@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Unique identifier -->
+  <key>Label</key>
+  <string>com.user.kroger-discount-scanner</string>
+
+  <!-- Command to run -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/usr/local/bin/kroger-scanner-wrapper</string>
+  </array>
+
+  <!-- Start at login -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Schedule: Monday 9:00 AM -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Weekday</key>
+      <integer>1</integer>
+      <key>Hour</key>
+      <integer>9</integer>
+      <key>Minute</key>
+      <integer>0</integer>
+    </dict>
+    <!-- Thursday 9:00 AM -->
+    <dict>
+      <key>Weekday</key>
+      <integer>4</integer>
+      <key>Hour</key>
+      <integer>9</integer>
+      <key>Minute</key>
+      <integer>0</integer>
+    </dict>
+  </array>
+
+  <!-- Logging -->
+  <key>StandardOutPath</key>
+  <string>/tmp/kroger-scanner-out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/kroger-scanner-err.log</string>
+
+  <!-- Environment variables (REPLACE WITH YOUR VALUES) -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>KROGER_CLIENT_ID</key>
+    <string>YOUR_CLIENT_ID_HERE</string>
+    <key>KROGER_CLIENT_SECRET</key>
+    <string>YOUR_CLIENT_SECRET_HERE</string>
+    <key>KROGER_PREFERRED_LOCATION</key>
+    <string>YOUR_LOCATION_ID_HERE</string>
+  </dict>
+</dict>
+</plist>

@@ -1374,6 +1374,326 @@ After shopping is complete:
 | `get_blocked_products` | View blocked products |
 | `toggle_ingredient_check` | Enable/disable specific ingredient checks |
 
+### Deal Discovery & Price Tracking
+| Tool | Use For |
+|------|---------|
+| `find_deals` | Search for products on sale (by category or search term) |
+| `get_price_history` | View price trends and best time to buy |
+| `add_to_watchlist` | Track items for price drops |
+| `scan_watchlist_for_deals` | Check tracked items for current sales |
+| `get_latest_deal_scan` | View results from automated background scans |
+
+### Whole Foods Catalog
+| Tool | Use For |
+|------|---------|
+| `add_to_whole_foods_catalog` | Add product to clean foods catalog |
+| `get_whole_foods_catalog` | View all whole foods |
+| `scan_for_whole_foods` | Find qualifying products by category |
+
+---
+
+## Deal Discovery & Savings
+
+### Automatic Price Tracking
+
+The system automatically records prices whenever you search or view products.
+No action needed - this builds a price history database over time for trend analysis.
+
+### Find Current Deals
+
+**Search for deals by category:**
+```
+find_deals(category='dairy', min_savings_percent=20)
+```
+
+Returns products on sale with at least 20% off. Categories:
+- `dairy`: milk, cheese, yogurt, butter
+- `meat`: chicken, beef, pork, turkey
+- `produce`: fruits, vegetables, salad
+- `bakery`: bread, bagels, rolls
+- `frozen`: frozen meals, ice cream, pizza
+- `beverages`: soda, juice, coffee, tea
+
+**Search for specific items on sale:**
+```
+find_deals(search_term='milk', min_savings_percent=15)
+```
+
+**Find best deals across all categories:**
+```
+find_deals(sort_by='savings_percent', limit=50)
+```
+
+Results include:
+- Savings amount and percentage
+- Cross-reference with favorites and pantry
+- Quality score (excellent/good/fair/poor)
+- Urgency level (high/medium/low)
+- Price trend (best price, below average, etc.)
+
+### Track Specific Items
+
+**Add item to watchlist:**
+```
+add_to_watchlist(
+    product_id='0001111041700',
+    target_price=3.00,
+    priority=3  # High priority = checked daily
+)
+```
+
+Priority levels:
+- **1 (low)**: Checked weekly
+- **2 (medium)**: Checked every 2-3 days
+- **3 (high)**: Checked daily
+
+**Check watchlist for deals:**
+```
+scan_watchlist_for_deals(
+    include_favorites=True,
+    include_pantry=True,
+    max_items=50
+)
+```
+
+This scans:
+1. Explicit watchlist (added via `add_to_watchlist`)
+2. Favorite list items
+3. Low pantry items (<=25% quantity)
+4. Recent purchases (last 30 days)
+
+### View Price History
+
+```
+get_price_history(product_id='0001111041700', days=30)
+```
+
+Returns:
+- Current price vs 30-day average
+- Lowest and highest prices seen
+- Sale frequency (how often it goes on sale)
+- Price timeline (daily observations)
+- Trend analysis (rising/falling/stable)
+- Best time to buy recommendation
+
+Example response:
+```
+{
+  "current_price": 4.99,
+  "statistics": {
+    "avg_price_30d": 4.75,
+    "lowest_price_30d": 3.49,
+    "highest_price_30d": 5.29,
+    "times_on_sale": 4,
+    "current_vs_avg": "+5.1%",
+    "trend": "stable",
+    "recommendation": "Wait for sale - typically $3.49 every 2 weeks"
+  }
+}
+```
+
+### Automated Background Scanning (Optional)
+
+Set up twice-weekly automated scanning via macOS launchd:
+- **Schedule**: Monday & Thursday at 9:00 AM (before weekend shopping)
+- **Automatic**: Scans your watchlist for price drops
+- **Notifications**: macOS notifications when deals found
+- **View Results**: Use `get_latest_deal_scan` tool
+
+**Setup**: See [docs/BACKGROUND_SETUP.md](docs/BACKGROUND_SETUP.md) for full instructions.
+
+Quick setup:
+```bash
+cd /path/to/kroger-mcp
+bash scripts/setup-background-scanner.sh
+```
+
+**View scan results:**
+```
+get_latest_deal_scan(mark_as_viewed=False)
+```
+
+Returns:
+- Scan date and time
+- Deals found with savings
+- Total savings available
+- Unviewed deals count
+
+Example response:
+```
+{
+  "scan_date": "2026-02-10",
+  "deal_count": 5,
+  "deals": [
+    {
+      "description": "Kroger Whole Milk, 1 Gallon",
+      "regular_price": 4.99,
+      "sale_price": 3.49,
+      "savings_amount": 1.50
+    },
+    ...
+  ],
+  "summary": {
+    "total_savings_available": 15.47,
+    "unviewed_deals": 3
+  }
+}
+```
+
+### Smart Shopping with Deals
+
+**Prioritize sale items in search:**
+```
+search_products(query='milk', sort_by_deals=True)
+```
+
+**Get suggestions with sale priority:**
+```
+get_shopping_suggestions(prioritize_sales=True)
+```
+
+**View cart savings:**
+```
+view_current_cart()
+```
+
+Shows:
+- Total regular price
+- Total sale price
+- Total savings
+- Savings percentage
+- Items on sale count
+
+---
+
+## Whole Foods Catalog
+
+Track clean/natural foods using the existing 75+ ingredient safety filter.
+
+### How It Works
+
+Products qualify as "whole foods" if they:
+1. Pass safety check (no CRITICAL or WARNING ingredients)
+2. Have minimal processing markers (<3 WATCH ingredients)
+3. Are SAFE or UNKNOWN status (clean)
+
+Uses the same evidence-based filter for:
+- Cancer prevention
+- Metabolic health
+- Microbiome optimization
+- Avoiding ultra-processed foods
+
+### Add Products to Catalog
+
+**Add single product with verification:**
+```
+add_to_whole_foods_catalog(
+    product_id='0001111041700',
+    verify_safety=True
+)
+```
+
+If product fails safety check, returns:
+```
+{
+  "success": False,
+  "error": "Contains warning ingredients",
+  "safety_status": "WARNING",
+  "matches": [
+    {"ingredient": "sodium nitrite", "severity": "critical"}
+  ]
+}
+```
+
+If product passes:
+```
+{
+  "success": True,
+  "safety_status": "SAFE",
+  "message": "Added to whole foods catalog"
+}
+```
+
+### View Catalog
+
+```
+get_whole_foods_catalog(
+    include_unavailable=False,
+    limit=100
+)
+```
+
+Returns list of all tracked whole foods with:
+- Product ID and description
+- Safety status
+- Date added
+- Current availability
+
+### Scan for Qualifying Products
+
+**Scan by category:**
+```
+scan_for_whole_foods(
+    category='produce',
+    auto_add=True,
+    limit=20
+)
+```
+
+Categories:
+- `produce`: vegetables
+- `dairy`: milk
+- `meat`: chicken breast
+- `bakery`: bread
+- `frozen`: frozen vegetables
+
+Returns:
+```
+{
+  "qualifying_products": [
+    {
+      "product_id": "12345",
+      "description": "Organic Baby Spinach",
+      "eligible": True,
+      "safety_status": "SAFE",
+      "reason": "No concerning ingredients detected"
+    }
+  ],
+  "summary": {
+    "scanned": 20,
+    "qualifying": 12,
+    "rejected": 8,
+    "auto_added": 12  # if auto_add=True
+  }
+}
+```
+
+### Integration with Other Tools
+
+**Cross-reference with deals:**
+```
+# 1. Build whole foods catalog
+scan_for_whole_foods(category='dairy', auto_add=True)
+
+# 2. Find deals on whole foods
+find_deals(category='dairy', min_savings_percent=15)
+
+# 3. Check if deal items are in catalog
+get_whole_foods_catalog()
+```
+
+**Verify cart against catalog:**
+```
+# 1. Add items to cart
+add_to_cart(items=[...])
+
+# 2. Check cart safety
+check_cart_safety()
+
+# 3. Verify items are in whole foods catalog
+get_whole_foods_catalog()
+```
+
 ---
 
 ## Remember

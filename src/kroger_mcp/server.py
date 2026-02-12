@@ -33,6 +33,7 @@ from .tools import favorites_tools
 from .tools import meal_planner_tools
 from .tools import safety_tools
 from .tools import deal_tools
+from .tools import whole_foods_tools
 
 # Import prompts
 from . import prompts
@@ -78,7 +79,20 @@ def create_server() -> FastMCP:
         - get_price_history - View price trends and best time to buy
         - add_to_watchlist - Track items for price drops
         - scan_watchlist_for_deals - Check tracked items for current sales
+        - get_latest_deal_scan - View results from automated background scans
         - Savings summaries in cart views
+
+        Background Scanning (Optional):
+        Configure automated deal scanning via launchd (Mon/Thu 9 AM):
+        - Scans watchlist items automatically
+        - Sends macOS notifications when deals found
+        - View results with get_latest_deal_scan
+
+        Whole Foods Catalog:
+        Track clean/natural foods using safety filter:
+        - add_to_whole_foods_catalog - Add products that pass safety checks
+        - get_whole_foods_catalog - View tracked whole foods
+        - scan_for_whole_foods - Find qualifying products by category
 
         Common workflows:
         1. Set a preferred location with set_preferred_location
@@ -123,6 +137,7 @@ def create_server() -> FastMCP:
     meal_planner_tools.register_tools(mcp)
     safety_tools.register_tools(mcp)
     deal_tools.register_tools(mcp)
+    whole_foods_tools.register_tools(mcp)
 
     # Register prompts
     prompts.register_prompts(mcp)

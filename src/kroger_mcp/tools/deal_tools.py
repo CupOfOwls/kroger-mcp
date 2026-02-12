@@ -636,3 +636,93 @@ def register_tools(mcp):
                 "sources": list(set(w["source"] for w in watchlist)),
             },
         }
+
+    @mcp.tool()
+    async def get_latest_deal_scan(
+        mark_as_viewed: bool = Field(
+            default=False,
+            description="Mark scan results as viewed"
+        ),
+        ctx: Context = None,
+    ) -> Dict[str, Any]:
+        """
+        Get results from latest background deal scan.
+
+        Shows deals found during Mon/Thu automated scans.
+        Ready for your weekend shopping!
+
+        Background scans run automatically via launchd on:
+        - Monday at 9:00 AM
+        - Thursday at 9:00 AM
+
+        Returns:
+            Latest scan results with deals, timing, and summary
+        """
+        conn = get_db_connection()
+        try:
+            # Get latest scan date
+            cursor = conn.execute(
+                """
+                SELECT scan_date, scan_time, COUNT(*) as deal_count
+                FROM deal_scan_results
+                GROUP BY scan_date
+                ORDER BY scan_date DESC
+                LIMIT 1
+                """
+            )
+            latest = cursor.fetchone()
+
+            if not latest:
+                return {
+                    "success": True,
+                    "message": "No scans found yet. First scan runs Monday 9 AM.",
+                    "deals": [],
+                    "summary": {
+                        "scan_date": None,
+                        "deal_count": 0,
+                        "total_savings_available": 0,
+                        "unviewed_deals": 0,
+                    },
+                }
+
+            # Get deals from latest scan
+            cursor = conn.execute(
+                """
+                SELECT product_id, description, regular_price, sale_price,
+                       savings_amount, viewed
+                FROM deal_scan_results
+                WHERE scan_date = ?
+                ORDER BY savings_amount DESC
+                """,
+                (latest["scan_date"],),
+            )
+
+            deals = [dict(row) for row in cursor.fetchall()]
+
+            # Mark as viewed if requested
+            if mark_as_viewed:
+                conn.execute(
+                    """
+                    UPDATE deal_scan_results
+                    SET viewed = 1
+                    WHERE scan_date = ?
+                    """,
+                    (latest["scan_date"],),
+                )
+                conn.commit()
+
+            return {
+                "success": True,
+                "scan_date": latest["scan_date"],
+                "scan_time": latest["scan_time"],
+                "deal_count": latest["deal_count"],
+                "deals": deals,
+                "summary": {
+                    "total_savings_available": round(sum(d["savings_amount"] for d in deals), 2),
+                    "unviewed_deals": sum(1 for d in deals if not d["viewed"]),
+                    "message": f"Scanned on {latest['scan_date']}, found {latest['deal_count']} deals",
+                },
+            }
+
+        finally:
+            conn.close()

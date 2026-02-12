@@ -151,15 +151,58 @@ fastmcp dev server.py --with-editable .
 
 ## 🛠️ Features
 
-This MCP server provides **89 tools** across 13 modules:
+This MCP server provides **97 tools** across 15 modules:
 - **Core Shopping**: Locations, products, cart management
 - **Smart Analytics**: Purchase predictions, consumption patterns, seasonal awareness
-- **Deal Discovery**: Automatic price tracking, deal search, price history, watchlist monitoring
+- **Deal Discovery**: Automatic price tracking, deal search, price history, watchlist monitoring, background scanning
+- **Whole Foods Catalog**: Track clean/natural foods verified via safety filter
 - **Recipe Management**: Save recipes, selective ordering with skip items
 - **Pantry Tracking**: Inventory levels with auto-depletion estimates
 - **Favorite Lists**: Named shopping lists (Weekly Staples, Party Supplies, etc.)
 - **Reporting**: Spending analysis, pattern reports, data export
 - **Health-Optimized Shopping**: Ingredient safety filtering for cancer prevention, metabolic health, microbiome optimization, and avoiding ultra-processed foods
+
+### 🎯 Highlight Features
+
+#### Automated Deal Scanning (Optional)
+Set up automated twice-weekly scanning via macOS launchd:
+- **Schedule**: Monday & Thursday at 9:00 AM (before weekend shopping)
+- **Automatic**: Scans your watchlist for price drops
+- **Notifications**: macOS notifications when deals found
+- **View Results**: Use `get_latest_deal_scan` tool with Claude
+- **Setup Guide**: See [docs/BACKGROUND_SETUP.md](docs/BACKGROUND_SETUP.md)
+
+Example workflow:
+```python
+# 1. Add items to watchlist
+add_to_watchlist(product_id='12345', priority=3)
+
+# 2. Setup runs automatically Mon/Thu 9 AM
+
+# 3. Friday morning - check for deals
+get_latest_deal_scan()
+# Returns: "5 deals found! Total savings: $15.47"
+```
+
+#### Whole Foods Catalog
+Track clean/natural foods using the existing 75+ ingredient safety filter:
+- **Auto-verify**: Products must pass safety checks (no CRITICAL/WARNING ingredients)
+- **Manual tracking**: Add products you trust
+- **Category scanning**: Find qualifying products by category (produce, dairy, meat, etc.)
+- **Integration**: Cross-references with deal discovery and cart safety
+
+Example workflow:
+```python
+# Scan for clean dairy products
+scan_for_whole_foods(category='dairy', auto_add=True)
+# Returns: "Found 12 qualifying products, auto-added to catalog"
+
+# View catalog
+get_whole_foods_catalog()
+
+# Add specific product
+add_to_whole_foods_catalog(product_id='67890')
+```
 
 ### 💬 Built-In MCP Prompts
 - **Shopping Path**: Find optimal path through store for a grocery list
@@ -189,7 +232,7 @@ This MCP server provides **89 tools** across 13 modules:
 | `search_products_by_id` | Find products by their specific product ID | No |
 | `get_product_images` | Get product images from specific perspective (front, back, etc.) | No |
 
-#### Deal Discovery Tools (4) ⭐ NEW
+#### Deal Discovery Tools (5) ⭐ NEW
 
 | Tool | Description | Auth Required |
 |------|-------------|---------------|
@@ -197,6 +240,15 @@ This MCP server provides **89 tools** across 13 modules:
 | `get_price_history` | View price history, trends, and best time to buy recommendations | No |
 | `add_to_watchlist` | Add products to watchlist for price monitoring | No |
 | `scan_watchlist_for_deals` | Check tracked items (favorites, pantry, watchlist) for current deals | No |
+| `get_latest_deal_scan` | View results from automated background scans (Mon/Thu 9 AM) | No |
+
+#### Whole Foods Catalog Tools (3) ⭐ NEW
+
+| Tool | Description | Auth Required |
+|------|-------------|---------------|
+| `add_to_whole_foods_catalog` | Add product to whole foods catalog (verified via safety filter) | No |
+| `get_whole_foods_catalog` | View all products in whole foods catalog | No |
+| `scan_for_whole_foods` | Search for products that qualify as whole foods by category | No |
 
 **Key Features:**
 - 🔄 **Automatic Price Tracking**: Records prices during normal searches (zero API cost)

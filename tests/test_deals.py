@@ -28,6 +28,8 @@ def clean_db():
     try:
         conn.execute("DELETE FROM price_history WHERE product_id LIKE 'TEST%'")
         conn.execute("DELETE FROM deal_watchlist WHERE product_id LIKE 'TEST%'")
+        conn.execute("DELETE FROM whole_foods_catalog WHERE product_id LIKE 'TEST%'")
+        conn.execute("DELETE FROM deal_scan_results WHERE product_id LIKE 'TEST%'")
         conn.commit()
     finally:
         conn.close()
@@ -39,6 +41,8 @@ def clean_db():
     try:
         conn.execute("DELETE FROM price_history WHERE product_id LIKE 'TEST%'")
         conn.execute("DELETE FROM deal_watchlist WHERE product_id LIKE 'TEST%'")
+        conn.execute("DELETE FROM whole_foods_catalog WHERE product_id LIKE 'TEST%'")
+        conn.execute("DELETE FROM deal_scan_results WHERE product_id LIKE 'TEST%'")
         conn.commit()
     finally:
         conn.close()
@@ -290,5 +294,140 @@ def test_price_deduplication(clean_db):
         )
         count = cursor.fetchone()["cnt"]
         assert count == 1
+    finally:
+        conn.close()
+
+
+def test_whole_foods_catalog_add(clean_db):
+    """Test adding product to whole foods catalog."""
+    insert_test_product("TEST_WF001", "Organic Baby Spinach")
+
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO whole_foods_catalog
+            (product_id, description, safety_status, added_by)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("TEST_WF001", "Organic Baby Spinach", "SAFE", "test"),
+        )
+        conn.commit()
+
+        # Verify
+        cursor = conn.execute(
+            "SELECT * FROM whole_foods_catalog WHERE product_id = ?",
+            ("TEST_WF001",),
+        )
+        result = cursor.fetchone()
+        assert result is not None
+        assert result["description"] == "Organic Baby Spinach"
+        assert result["safety_status"] == "SAFE"
+    finally:
+        conn.close()
+
+
+def test_deal_scan_results_add(clean_db):
+    """Test adding scan results."""
+    insert_test_product("TEST_SCAN001", "Test Milk")
+
+    conn = get_db_connection()
+    try:
+        scan_time = datetime.now().isoformat()
+        scan_date = datetime.now().date().isoformat()
+
+        conn.execute(
+            """
+            INSERT INTO deal_scan_results
+            (product_id, description, regular_price, sale_price,
+             savings_amount, scan_date, scan_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("TEST_SCAN001", "Test Milk", 4.99, 3.99, 1.00, scan_date, scan_time),
+        )
+        conn.commit()
+
+        # Verify
+        cursor = conn.execute(
+            "SELECT * FROM deal_scan_results WHERE product_id = ?",
+            ("TEST_SCAN001",),
+        )
+        result = cursor.fetchone()
+        assert result is not None
+        assert result["regular_price"] == 4.99
+        assert result["sale_price"] == 3.99
+        assert result["savings_amount"] == 1.00
+    finally:
+        conn.close()
+
+
+def test_deal_scan_results_cleanup(clean_db):
+    """Test that old scan results are cleaned up."""
+    insert_test_product("TEST_SCAN002", "Test Bread")
+
+    conn = get_db_connection()
+    try:
+        # Insert old result (8 days ago)
+        old_date = (datetime.now() - timedelta(days=8)).date().isoformat()
+        conn.execute(
+            """
+            INSERT INTO deal_scan_results
+            (product_id, description, regular_price, sale_price,
+             savings_amount, scan_date, scan_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "TEST_SCAN002",
+                "Test Bread",
+                3.99,
+                2.99,
+                1.00,
+                old_date,
+                datetime.now().isoformat(),
+            ),
+        )
+        conn.commit()
+
+        # Clean old results (simulate background_scanner.py cleanup)
+        conn.execute("DELETE FROM deal_scan_results WHERE scan_date < date('now', '-7 days')")
+        conn.commit()
+
+        # Verify old result is gone
+        cursor = conn.execute(
+            "SELECT COUNT(*) as cnt FROM deal_scan_results WHERE product_id = ?",
+            ("TEST_SCAN002",),
+        )
+        count = cursor.fetchone()["cnt"]
+        assert count == 0
+    finally:
+        conn.close()
+
+
+def test_watchlist_add(clean_db):
+    """Test adding item to watchlist."""
+    insert_test_product("TEST_WATCH001", "Test Yogurt")
+
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO deal_watchlist
+            (product_id, description, target_price, priority)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("TEST_WATCH001", "Test Yogurt", 2.99, 3),
+        )
+        conn.commit()
+
+        # Verify
+        cursor = conn.execute(
+            "SELECT * FROM deal_watchlist WHERE product_id = ?",
+            ("TEST_WATCH001",),
+        )
+        result = cursor.fetchone()
+        assert result is not None
+        assert result["description"] == "Test Yogurt"
+        assert result["target_price"] == 2.99
+        assert result["priority"] == 3
     finally:
         conn.close()
