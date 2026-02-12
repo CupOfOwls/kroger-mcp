@@ -263,6 +263,35 @@ def initialize_database() -> None:
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
 
+            -- Price history tracking (for deal discovery and trend analysis)
+            CREATE TABLE IF NOT EXISTS price_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id TEXT NOT NULL,
+                regular_price REAL,
+                sale_price REAL,
+                on_sale INTEGER DEFAULT 0,
+                savings_amount REAL DEFAULT 0,
+                savings_percent REAL DEFAULT 0,
+                location_id TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                source TEXT,
+                FOREIGN KEY (product_id) REFERENCES products(product_id)
+            );
+
+            -- Deal watchlist (user-tracked items for price monitoring)
+            CREATE TABLE IF NOT EXISTS deal_watchlist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id TEXT UNIQUE NOT NULL,
+                description TEXT,
+                target_price REAL,
+                priority INTEGER DEFAULT 1,
+                added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_checked_at TEXT,
+                best_price_seen REAL,
+                best_price_date TEXT,
+                FOREIGN KEY (product_id) REFERENCES products(product_id)
+            );
+
             -- Create default favorites list
             INSERT OR IGNORE INTO favorite_lists (id, name, description, list_type)
             VALUES ('default', 'My Favorites', 'Default favorites list', 'custom');
@@ -308,6 +337,16 @@ def initialize_database() -> None:
                 ON blocked_products(product_id);
             CREATE INDEX IF NOT EXISTS idx_ingredient_preferences_key
                 ON ingredient_preferences(ingredient_key);
+            CREATE INDEX IF NOT EXISTS idx_price_history_product
+                ON price_history(product_id);
+            CREATE INDEX IF NOT EXISTS idx_price_history_date
+                ON price_history(observed_at);
+            CREATE INDEX IF NOT EXISTS idx_price_history_on_sale
+                ON price_history(on_sale);
+            CREATE INDEX IF NOT EXISTS idx_price_history_product_date
+                ON price_history(product_id, observed_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_watchlist_priority
+                ON deal_watchlist(priority DESC, last_checked_at ASC);
         """)
         conn.commit()
     finally:
@@ -360,7 +399,8 @@ def get_table_counts() -> dict:
                       'favorite_lists', 'favorite_list_items',
                       'meal_plans', 'meal_entries',
                       'safe_products', 'blocked_products',
-                      'ingredient_preferences', 'safety_settings']:
+                      'ingredient_preferences', 'safety_settings',
+                      'price_history', 'deal_watchlist']:
             cursor = conn.execute(f"SELECT COUNT(*) FROM {table}")
             counts[table] = cursor.fetchone()[0]
         return counts

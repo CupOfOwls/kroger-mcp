@@ -1,5 +1,24 @@
 # Claude Code Project Assistant
 
+---
+
+## 📖 REQUIRED READING: Project-Specific Instructions
+
+**ALWAYS read `CLAUDE_PROJECT.md` at the start of any session working on this project.**
+
+This file contains critical project-specific instructions for:
+- **WRDS MCP usage** — Data retrieval prioritization and tool usage
+- **Python integration** — When to use Python vs WRDS MCP
+- **Output file locations** — All exports/charts MUST go to project folders
+- **ETF PERMNOs** — Common identifiers for major ETFs in CRSP
+- **Investment research workflow** — Screener, analysis, and validation patterns
+
+```
+Location: ./CLAUDE_PROJECT.md
+```
+
+---
+
 ## CORE IDENTITY
 
 You are a **capable engineer** who values:
@@ -303,7 +322,7 @@ npx claude-flow@alpha memory consolidate            # Prune low-confidence
 - **Adaptive**: Dynamic topology switching based on task
 - **Collective**: Consensus-based group intelligence
 
-### Agent Types (54+ available)
+### Agent Types (150+ available, including 99 from Plugin Ecosystem)
 ```
 coder       → Implementation specialist
 reviewer    → Code review and QA
@@ -381,6 +400,52 @@ curl "http://localhost:37777/api/search?query=bugfix&type=feature"
 
 ---
 
+## Plugin Ecosystem (67 Plugins, 99 Agents, 107 Skills)
+
+Production-ready workflow plugins from `~/.claude/New Tools/agents/plugins/`.
+Automatically resolved and injected by hooks based on file type, tool context, and task keywords.
+
+### Categories
+
+| Category | Plugins | Focus |
+|----------|---------|-------|
+| Development | backend-development, frontend-mobile, full-stack, multi-platform, developer-essentials | App development across stacks |
+| Languages | python, javascript-typescript, systems-programming, jvm, web-scripting, functional, julia, shell, arm-cortex | Language-specific best practices |
+| Testing | unit-testing, tdd-workflows | Test automation and TDD methodology |
+| Security | security-scanning, security-compliance, backend-api-security, frontend-mobile-security | SAST, OWASP, compliance |
+| Infrastructure | cloud-infrastructure, kubernetes-operations, cicd-automation, deployment-strategies | Cloud, K8s, CI/CD, IaC |
+| Operations | incident-response, error-diagnostics, distributed-debugging, observability-monitoring | Production operations |
+| Data | data-engineering, data-validation-suite, database-design, database-migrations | ETL, schema, migrations |
+| AI/ML | llm-application-dev, agent-orchestration, context-management, machine-learning-ops | LLM apps, MLOps, agents |
+| Quality | code-review-ai, comprehensive-review, performance-testing-review | Code quality and review |
+| Documentation | code-documentation, documentation-generation, c4-architecture | Docs, diagrams, ADRs |
+| Business | business-analytics, hr-legal-compliance, customer-sales-automation | Business operations |
+| Marketing | seo-content-creation, seo-technical-optimization, seo-analysis-monitoring, content-marketing | SEO, content strategy |
+| Finance | quantitative-trading, payment-processing | Trading, payments |
+| Blockchain | blockchain-web3 | Smart contracts, DeFi |
+| Gaming | game-development | Unity, Minecraft |
+| Accessibility | accessibility-compliance | WCAG, a11y |
+| Modernization | framework-migration, codebase-cleanup | Legacy modernization |
+
+### How Plugin Resolution Works
+
+Hooks automatically resolve relevant plugins:
+
+1. **PreToolUse** (step 10): Matches by file extension and tool context
+2. **SessionStart**: Detects project type (`pyproject.toml` -> python plugins, etc.)
+3. **PostToolUse**: Records which plugins were relevant to successful operations
+4. **UserPromptSubmit**: Analyzes prompt keywords against plugin catalog
+
+### Reference Paths
+
+- **Marketplace catalog:** `~/.claude/New Tools/agents/.claude-plugin/marketplace.json`
+- **Plugin resolver:** `~/.claude/hooks/utils/plugin_resolver.py`
+- **Agent index:** `~/.claude/agents/PLUGINS_INDEX.md`
+- **Skills index:** `~/.claude/skills/PLUGINS_INDEX.md`
+- **Installer:** `~/.claude/scripts/install-new-tools.sh`
+
+---
+
 ## Integrated Memory Architecture
 
 ```
@@ -396,7 +461,8 @@ curl "http://localhost:37777/api/search?query=bugfix&type=feature"
 │  PreToolUse (every operation)                            │
 │     ├─→ FEATURES.md: current task injection             │
 │     ├─→ PatternLearner: recent patterns                 │
-│     └─→ ReasoningBank: tool-specific patterns           │
+│     ├─→ ReasoningBank: tool-specific patterns           │
+│     └─→ PluginResolver: file/tool context matching      │
 │                                                          │
 │  Stop                                                    │
 │     ├─→ Claude-Mem: persist_session_learnings()         │
@@ -419,4 +485,4 @@ You provide:
 
 **Do good work. Be honest about tradeoffs. Keep learning.**
 
-**Version:** 5.5 (Humble Engineer + Claude Flow + Claude-Mem + MCP Tools)
+**Version:** 5.6 (Humble Engineer + Claude Flow + Claude-Mem + MCP Tools + Plugin Ecosystem)

@@ -23,6 +23,7 @@ from ..analytics.safety import (
     BlockMode,
 )
 from ..analytics.ingredients import check_product_safety
+from ..analytics.deals import record_price_observation
 
 
 def register_tools(mcp):
@@ -407,6 +408,21 @@ def register_tools(mcp):
                 formatted = [format_product(p) for p in products["data"]]
                 formatted, fav_count, safety_counts = mark_and_sort_products(formatted)
 
+                # Record prices for history tracking (passive, no API calls)
+                for product in formatted:
+                    try:
+                        pricing = product.get("pricing", {})
+                        if pricing and location_id:
+                            record_price_observation(
+                                product_id=product["product_id"],
+                                regular_price=pricing.get("regular_price"),
+                                sale_price=pricing.get("sale_price"),
+                                location_id=location_id,
+                                source="search"
+                            )
+                    except Exception:
+                        pass  # Don't let price recording break search
+
                 return (
                     term,
                     {
@@ -617,7 +633,24 @@ def register_tools(mcp):
                 )
                 if not product_details or "data" not in product_details:
                     return (pid, {"error": f"Product {pid} not found"})
-                return (pid, format_details(product_details["data"]))
+
+                result = format_details(product_details["data"])
+
+                # Record detailed price observation
+                try:
+                    pricing = result.get("pricing", {})
+                    if pricing and location_id:
+                        record_price_observation(
+                            product_id=pid,
+                            regular_price=pricing.get("regular_price"),
+                            sale_price=pricing.get("sale_price"),
+                            location_id=location_id,
+                            source="details"
+                        )
+                except Exception:
+                    pass  # Don't let price recording break details fetch
+
+                return (pid, result)
             except Exception as e:
                 return (pid, {"error": str(e)})
 

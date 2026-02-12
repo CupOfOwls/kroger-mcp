@@ -32,6 +32,7 @@ from .tools import reporting_tools
 from .tools import favorites_tools
 from .tools import meal_planner_tools
 from .tools import safety_tools
+from .tools import deal_tools
 
 # Import prompts
 from . import prompts
@@ -53,16 +54,43 @@ def create_server() -> FastMCP:
         - User profile management
         - Purchase predictions and smart shopping suggestions
         - Item categorization (routine/regular/treat)
+        - Ingredient safety filtering for health-optimized shopping
+
+        Health-Optimized Shopping:
+        This server includes an evidence-based ingredient filtering system designed
+        to optimize for:
+        1. General Health - Avoid additives linked to chronic disease outcomes
+        2. Cancer Prevention - Flag IARC-classified carcinogens and genotoxic additives
+        3. Metabolic Health - Identify blood sugar spiking ingredients and insulin disruptors
+        4. Microbiome Optimization - Flag emulsifiers/sweeteners with gut-barrier disruption
+        5. Minimizing Ultra-Processed Foods - Detect markers of heavy industrial processing
+
+        Use safety tools to:
+        - check_product_safety / check_products_safety - Scan products for bad ingredients
+        - check_cart_safety - Scan entire cart for concerns
+        - get_bad_ingredients_list - View 62+ flagged ingredients with severity levels
+        - configure_safety_settings - Enable/disable filtering, set block mode
+        - approve_product / block_product - Manage personal safe/blocked lists
+
+        Deal Discovery & Price Tracking:
+        The server automatically tracks prices during searches and provides:
+        - find_deals - Search for products on sale with significant discounts
+        - get_price_history - View price trends and best time to buy
+        - add_to_watchlist - Track items for price drops
+        - scan_watchlist_for_deals - Check tracked items for current sales
+        - Savings summaries in cart views
 
         Common workflows:
         1. Set a preferred location with set_preferred_location
-        2. Search for products with search_products
-        3. Add items to cart with add_items_to_cart
-        4. Use bulk_add_to_cart for multiple items at once
-        5. View current cart with view_current_cart
-        6. Mark order as placed with mark_order_placed
-        7. Get purchase predictions with get_purchase_predictions
-        8. Generate smart shopping lists with get_shopping_suggestions
+        2. Search for products with search_products (prices automatically tracked)
+        3. Find deals with find_deals (by category or search term)
+        4. Check product safety with check_product_safety before adding to cart
+        5. Add items to cart with add_to_cart
+        6. Use check_cart_safety to scan cart for ingredient concerns
+        7. View current cart with view_current_cart (includes savings summary)
+        8. Mark order as placed with mark_order_placed
+        9. Get purchase predictions with get_purchase_predictions
+        10. Generate smart shopping lists with get_shopping_suggestions
 
         Authentication Flow:
         1. Use start_authentication to get an authorization URL
@@ -94,6 +122,7 @@ def create_server() -> FastMCP:
     favorites_tools.register_tools(mcp)
     meal_planner_tools.register_tools(mcp)
     safety_tools.register_tools(mcp)
+    deal_tools.register_tools(mcp)
 
     # Register prompts
     prompts.register_prompts(mcp)

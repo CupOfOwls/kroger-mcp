@@ -151,13 +151,15 @@ fastmcp dev server.py --with-editable .
 
 ## 🛠️ Features
 
-This MCP server provides **71 tools** across 11 modules:
+This MCP server provides **89 tools** across 13 modules:
 - **Core Shopping**: Locations, products, cart management
 - **Smart Analytics**: Purchase predictions, consumption patterns, seasonal awareness
+- **Deal Discovery**: Automatic price tracking, deal search, price history, watchlist monitoring
 - **Recipe Management**: Save recipes, selective ordering with skip items
 - **Pantry Tracking**: Inventory levels with auto-depletion estimates
 - **Favorite Lists**: Named shopping lists (Weekly Staples, Party Supplies, etc.)
 - **Reporting**: Spending analysis, pattern reports, data export
+- **Health-Optimized Shopping**: Ingredient safety filtering for cancer prevention, metabolic health, microbiome optimization, and avoiding ultra-processed foods
 
 ### 💬 Built-In MCP Prompts
 - **Shopping Path**: Find optimal path through store for a grocery list
@@ -165,7 +167,7 @@ This MCP server provides **71 tools** across 11 modules:
 - **Store Selection**: Help user set their preferred Kroger store
 - **Recipe Shopping**: Find recipes and add ingredients to cart
 
-### 📚 Available Tools (71 Total)
+### 📚 Available Tools (89 Total)
 
 #### Location Tools (6)
 
@@ -186,6 +188,27 @@ This MCP server provides **71 tools** across 11 modules:
 | `get_product_details` | Get detailed product information including pricing | No |
 | `search_products_by_id` | Find products by their specific product ID | No |
 | `get_product_images` | Get product images from specific perspective (front, back, etc.) | No |
+
+#### Deal Discovery Tools (4) ⭐ NEW
+
+| Tool | Description | Auth Required |
+|------|-------------|---------------|
+| `find_deals` | Search for products on sale with significant discounts (by category or search term) | No |
+| `get_price_history` | View price history, trends, and best time to buy recommendations | No |
+| `add_to_watchlist` | Add products to watchlist for price monitoring | No |
+| `scan_watchlist_for_deals` | Check tracked items (favorites, pantry, watchlist) for current deals | No |
+
+**Key Features:**
+- 🔄 **Automatic Price Tracking**: Records prices during normal searches (zero API cost)
+- 🏷️ **Deal Discovery**: Search by category (dairy, meat, produce, etc.) or search term
+- 📊 **Price History**: 30-day trends, sale frequency, best time to buy recommendations
+- 👀 **Smart Watchlist**: Monitors favorites, low pantry items, and recent purchases
+- 💰 **Savings Summary**: Automatic calculation in cart views
+
+**Example: Find deals on dairy products with at least 20% off**
+```
+find_deals(category='dairy', min_savings_percent=20, sort_by='savings_percent')
+```
 
 #### Cart Tools (7)
 
@@ -300,6 +323,38 @@ Named shopping lists as a workaround for Kroger's Public API not supporting list
 | `get_favorite_list_items` | Get all items in a list with pantry status | No |
 | `order_favorite_list` | Add list items to cart (skip well-stocked items) | Yes |
 | `suggest_favorites` | Suggest products based on purchase history | No |
+
+#### Ingredient Safety Tools (14)
+
+Evidence-based ingredient filtering system for health-optimized shopping. Designed to help users:
+- **General Health** - Avoid additives linked to chronic disease outcomes
+- **Cancer Prevention** - Flag IARC-classified carcinogens and genotoxic additives
+- **Metabolic Health** - Identify blood sugar spiking ingredients and insulin disruptors
+- **Microbiome Optimization** - Flag emulsifiers/sweeteners with gut-barrier disruption evidence
+- **Minimize Ultra-Processed Foods** - Detect markers of heavy industrial processing
+
+| Tool | Description | Auth Required |
+|------|-------------|---------------|
+| `get_safety_settings` | Get current ingredient filter settings | No |
+| `configure_safety_settings` | Enable/disable filtering, set block mode | No |
+| `get_bad_ingredients_list` | Get 62+ flagged ingredients with severity/reasons | No |
+| `toggle_ingredient_check` | Enable/disable specific ingredient checks | No |
+| `get_ingredient_preferences` | View user's ingredient preference overrides | No |
+| `reset_ingredient_preferences` | Reset all ingredient preferences to defaults | No |
+| `approve_product` | Add product to safe list (bypasses all checks) | No |
+| `unapprove_product` | Remove product from safe list | No |
+| `get_safe_products` | List all safe-listed products | No |
+| `block_product` | Add product to blocked list (requires confirmation) | No |
+| `unblock_product` | Remove product from blocked list | No |
+| `get_blocked_products` | List all blocked products | No |
+| `check_product_safety` | Check single product for bad ingredients | No |
+| `check_products_safety` | Batch check up to 50 products | No |
+| `check_cart_safety` | Scan entire cart for safety concerns | No |
+
+**Severity Levels:**
+- **CRITICAL**: Strong human evidence (IARC, FDA, EFSA) - strongly recommend avoiding
+- **WARNING**: Moderate evidence, regulatory concern, microbiome disruption
+- **WATCH**: Ultra-processing markers, minimize for optimal health
 
 ### 🧰 Local-Only Cart Tracking
 

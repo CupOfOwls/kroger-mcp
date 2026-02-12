@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional
 
 from fastmcp import Context
 from pydantic import Field
-from .shared import get_authenticated_client
+from .shared import get_authenticated_client, get_preferred_location_id
 from ..analytics.safety import (
     get_all_safe_product_ids,
     get_all_blocked_product_ids,
@@ -16,6 +16,7 @@ from ..analytics.safety import (
     is_filtering_enabled,
 )
 from ..analytics.ingredients import check_product_safety
+from ..analytics.deals import record_price_observation, calculate_cart_savings
 
 
 # Cart storage file
@@ -106,6 +107,22 @@ def _add_item_to_local_cart(product_id: str, quantity: int, modality: str, produ
     except Exception as e:
         # Don't fail cart operations if analytics fails
         print(f"Warning: Could not record analytics: {e}")
+
+    # Record price observation if we have pricing data
+    if product_details:
+        try:
+            pricing = product_details.get("pricing", {})
+            location_id = get_preferred_location_id()
+            if pricing and location_id:
+                record_price_observation(
+                    product_id=product_id,
+                    regular_price=pricing.get("regular_price"),
+                    sale_price=pricing.get("sale_price") or pricing.get("price"),
+                    location_id=location_id,
+                    source="cart_add"
+                )
+        except Exception:
+            pass  # Don't fail cart operations if price recording fails
 
 
 def register_tools(mcp):
@@ -566,23 +583,30 @@ def register_tools(mcp):
     async def view_current_cart(ctx: Context = None) -> Dict[str, Any]:
         """
         View the current cart contents tracked locally.
-        
+
         Note: This tool can only see items that were added via this MCP server.
         The Kroger API does not provide permission to query the actual user cart contents.
-        
+
         Returns:
-            Dictionary containing current cart items and summary
+            Dictionary containing current cart items, summary, and savings info
         """
         try:
             cart_data = _load_cart_data()
             current_cart = cart_data.get("current_cart", [])
-            
+
             # Calculate summary
             total_quantity = sum(item.get("quantity", 0) for item in current_cart)
             pickup_items = [item for item in current_cart if item.get("modality") == "PICKUP"]
             delivery_items = [item for item in current_cart if item.get("modality") == "DELIVERY"]
-            
-            return {
+
+            # Calculate savings
+            savings_summary = None
+            try:
+                savings_summary = calculate_cart_savings(current_cart)
+            except Exception:
+                pass  # Don't fail if savings calculation fails
+
+            result = {
                 "success": True,
                 "current_cart": current_cart,
                 "summary": {
@@ -593,6 +617,11 @@ def register_tools(mcp):
                     "last_updated": cart_data.get("last_updated")
                 }
             }
+
+            if savings_summary:
+                result["savings_summary"] = savings_summary
+
+            return result
         except Exception as e:
             return {
                 "success": False,
