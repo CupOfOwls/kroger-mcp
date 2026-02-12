@@ -10,7 +10,8 @@ from fastmcp import Context
 from datetime import datetime
 
 from .shared import get_client_credentials_client, get_preferred_location_id
-from .product_tools import search_products, get_product_details
+# Note: search_products and get_product_details are MCP tools and can't be imported
+# We'll use the API client directly when needed
 from ..analytics.database import get_db_cursor, get_db_connection
 from ..analytics.ingredients import check_product_safety
 from ..analytics.safety import get_disabled_ingredients
@@ -120,13 +121,13 @@ def register_tools(mcp):
             location_id = get_preferred_location_id()
             if location_id:
                 try:
-                    product = await get_product_details(
+                    client = get_client_credentials_client()
+                    product_data = client.get_product(
                         product_id=product_id,
-                        location_id=location_id,
-                        ctx=ctx
+                        location_id=location_id
                     )
-                    if product.get("success"):
-                        description = product.get("data", {}).get("description")
+                    if product_data and product_data.get("data"):
+                        description = product_data["data"].get("description")
                 except Exception:
                     pass
 
@@ -292,22 +293,27 @@ def register_tools(mcp):
         if ctx:
             await ctx.info(f"Scanning for whole foods in category: {category}")
 
-        # Search for products
-        search_result = await search_products(
-            search_term=search_term,
-            location_id=location_id,
-            limit=limit,
-            ctx=ctx,
-        )
+        # Search for products using API client directly
+        try:
+            client = get_client_credentials_client()
+            search_result = client.search_products(
+                term=search_term,
+                location_id=location_id,
+                limit=limit
+            )
 
-        if not search_result.get("success"):
+            if not search_result or not search_result.get("data"):
+                return {
+                    "success": False,
+                    "error": "Search failed or returned no results"
+                }
+
+            products = search_result.get("data", [])
+        except Exception as e:
             return {
                 "success": False,
-                "error": "Search failed",
-                "details": search_result,
+                "error": f"Search failed: {str(e)}"
             }
-
-        products = search_result.get("data", [])
         disabled = get_disabled_ingredients()
 
         # Check each product

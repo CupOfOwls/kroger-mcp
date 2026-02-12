@@ -341,3 +341,60 @@ def get_all_product_statistics() -> List[Dict[str, Any]]:
         return [dict(row) for row in cursor.fetchall()]
     finally:
         conn.close()
+
+
+def get_recent_purchases(
+    days: int = 30,
+    limit: int = 100,
+    event_type: str = "order_placed"
+) -> List[Dict[str, Any]]:
+    """
+    Get recent product purchases within specified time window.
+
+    Returns unique products that were purchased, ordered by most recent first.
+    Useful for finding recently purchased items to monitor for deals.
+
+    Args:
+        days: Number of days to look back (default: 30)
+        limit: Maximum number of products to return (default: 100)
+        event_type: Type of event to filter ('order_placed' or 'cart_add')
+
+    Returns:
+        List of dicts with keys:
+        - product_id: Product identifier
+        - description: Product description (may be None)
+        - brand: Product brand (may be None)
+        - last_purchase: Timestamp of most recent purchase
+
+    Example:
+        >>> recent = get_recent_purchases(days=7, limit=20)
+        >>> for item in recent:
+        ...     print(f"{item['product_id']}: {item['description']}")
+    """
+    from datetime import timedelta
+
+    ensure_initialized()
+
+    # Calculate cutoff date
+    cutoff_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute("""
+            SELECT DISTINCT
+                pe.product_id,
+                p.description,
+                p.brand,
+                MAX(pe.event_timestamp) as last_purchase
+            FROM purchase_events pe
+            LEFT JOIN products p ON pe.product_id = p.product_id
+            WHERE pe.event_date >= ?
+              AND pe.event_type = ?
+            GROUP BY pe.product_id
+            ORDER BY last_purchase DESC
+            LIMIT ?
+        """, (cutoff_date, event_type, limit))
+
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()

@@ -18,7 +18,7 @@ Tools include:
 - Customizing which ingredients to check for
 """
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Literal
 from pydantic import Field
 from fastmcp import Context
 
