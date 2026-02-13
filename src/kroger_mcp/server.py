@@ -55,8 +55,10 @@ async def _cleanup_stale_sessions():
 
 def create_server() -> FastMCP:
     """Create and configure the FastMCP server instance"""
-    # Initialize session cleanup task
-    asyncio.create_task(_cleanup_stale_sessions())
+    # TODO: Implement session cleanup using FastMCP lifecycle hooks
+    # The _cleanup_stale_sessions() function is defined above but not currently
+    # scheduled because asyncio.create_task() requires a running event loop.
+    # Once FastMCP startup hooks are implemented, schedule it there.
 
     # Initialize the FastMCP server
     mcp = FastMCP(
