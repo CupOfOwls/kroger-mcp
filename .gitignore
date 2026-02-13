@@ -4,6 +4,20 @@ venv/
 
 # Local Storage / Memory
 *.json
+!package.json
+!tsconfig.json
+!pyproject.toml
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Runtime data directory
+data/
+
+# Swarm/agent memory
+.swarm/
 
 # Token files
 .kroger_token*
@@ -12,6 +26,10 @@ venv/
 __pycache__/
 *.py[cod]
 *$py.class
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.benchmarks/
 
 # Distribution / packaging
 dist/
@@ -32,6 +50,9 @@ htmlcov/
 
 # Logs
 *.log
+logs/*.log
 
+# macOS
+.DS_Store
 
 PUBLISHING.md

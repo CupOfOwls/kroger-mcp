@@ -214,7 +214,7 @@ def register_tools(mcp):
         servings_override: Optional[int] = Field(
             default=None,
             ge=1,
-            description="Override recipe default servings (single mode)"
+            description="Override servings (None = use household default, not recipe default)"
         ),
         notes: Optional[str] = Field(
             default=None,
@@ -233,6 +233,10 @@ def register_tools(mcp):
         """
         Assign recipe(s) to meal slots. Supports single or batch operations.
 
+        If servings_override is not specified, uses your default_servings_per_meal
+        preference instead of the recipe's base servings. This ensures meals are
+        automatically scaled to your household size.
+
         SINGLE MODE:
             assign_meal(
                 plan_id="abc123",
@@ -240,13 +244,14 @@ def register_tools(mcp):
                 meal_date="2026-01-27",
                 meal_slot="dinner"
             )
+            # Servings will be your household default
 
         BATCH MODE:
             assign_meal(
                 plan_id="abc123",
                 assignments=[
                     {"recipe_id": "recipe1", "meal_date": "2026-01-27", "meal_slot": "dinner"},
-                    {"recipe_id": "recipe2", "meal_date": "2026-01-28", "meal_slot": "lunch"}
+                    {"recipe_id": "recipe2", "meal_date": "2026-01-28", "meal_slot": "lunch", "servings_override": 6}
                 ]
             )
 

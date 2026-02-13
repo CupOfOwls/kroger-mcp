@@ -81,7 +81,12 @@ def register_tools(mcp):
         instructions: str = Field(
             default=None, description="Cooking instructions"
         ),
-        servings: int = Field(default=4, ge=1, description="Number of servings"),
+        servings: Optional[int] = Field(
+            default=None,
+            ge=1,
+            le=20,
+            description="Number of servings (defaults to your household preference)"
+        ),
         description: str = Field(
             default=None, description="Brief recipe description"
         ),
@@ -98,6 +103,9 @@ def register_tools(mcp):
         """
         Save a recipe for future ordering.
 
+        If servings is not specified, uses your default servings preference
+        (set via set_default_servings).
+
         Each ingredient should have at minimum a 'name' field. Optional fields:
         - quantity: Amount needed (number)
         - unit: Measurement unit (oz, cups, lbs, etc.)
@@ -108,6 +116,15 @@ def register_tools(mcp):
         {"name": "Eggs", "quantity": 4, "unit": "large", "category": "dairy"}
         """
         try:
+            from .shared import get_default_servings
+
+            # Use user's default if not specified
+            if servings is None:
+                servings = get_default_servings()
+                using_default = True
+            else:
+                using_default = False
+
             # Validate ingredients
             if not ingredients:
                 return {
@@ -151,9 +168,13 @@ def register_tools(mcp):
             return {
                 "success": True,
                 "recipe_id": recipe_id,
-                "message": f"Recipe '{name}' saved successfully",
-                "ingredient_count": len(ingredients),
-                "servings": servings
+                "name": name,
+                "servings": servings,
+                "using_default_servings": using_default,
+                "household_default": get_default_servings(),
+                "message": f"Recipe '{name}' saved with {servings} servings" +
+                          (" (your household default)" if using_default else ""),
+                "ingredient_count": len(ingredients)
             }
 
         except Exception as e:
@@ -220,12 +241,25 @@ def register_tools(mcp):
     @mcp.tool()
     async def get_recipe(
         recipe_id: str = Field(description="Recipe ID to retrieve"),
+        scale_to_household: bool = Field(
+            default=False,
+            description="If True, auto-scale ingredients to household default servings"
+        ),
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
         Get full details of a specific recipe including all ingredients.
+
+        Args:
+            recipe_id: Recipe to retrieve
+            scale_to_household: If True, scales ingredients to your household default
+
+        Returns:
+            Recipe details with household servings context
         """
         try:
+            from .shared import get_default_servings
+
             recipe = _find_recipe(recipe_id)
             if not recipe:
                 return {
@@ -233,10 +267,45 @@ def register_tools(mcp):
                     "error": f"Recipe '{recipe_id}' not found"
                 }
 
-            return {
+            household_default = get_default_servings()
+            recipe_servings = recipe.get("servings", 4)
+            servings_match = recipe_servings == household_default
+
+            result = {
                 "success": True,
-                "recipe": recipe
+                "recipe": recipe,
+                "household_default_servings": household_default,
+                "servings_match": servings_match,
+                "servings_note": (
+                    f"Matches your household default ({household_default} servings)"
+                    if servings_match
+                    else f"Recipe has {recipe_servings} servings, your household default is {household_default}"
+                )
             }
+
+            # If scale_to_household requested, provide scaled ingredients
+            if scale_to_household and not servings_match:
+                scale_factor = household_default / recipe_servings
+                scaled_ingredients = []
+
+                for ing in recipe.get("ingredients", []):
+                    scaled_ing = ing.copy()
+                    if ing.get("quantity"):
+                        scaled_ing["quantity"] = round(ing["quantity"] * scale_factor, 2)
+                        scaled_ing["original_quantity"] = ing["quantity"]
+                    scaled_ingredients.append(scaled_ing)
+
+                result["scaled_ingredients"] = scaled_ingredients
+                result["scale_factor"] = scale_factor
+                result["scaled_servings"] = household_default
+                result["scaling_note"] = f"Ingredients scaled from {recipe_servings} to {household_default} servings"
+            elif scale_to_household and servings_match:
+                result["scaling_note"] = "No scaling needed - recipe already matches household default"
+
+            if not scale_to_household and not servings_match:
+                result["suggestion"] = f"Use scale_to_household=True to auto-scale to {household_default} servings"
+
+            return result
 
         except Exception as e:
             return {"success": False, "error": f"Failed to get recipe: {str(e)}"}
@@ -445,12 +514,15 @@ def register_tools(mcp):
                     "skip_reason": "user has item" if will_skip else None
                 })
 
+            from .shared import get_default_servings
+
             return {
                 "success": True,
                 "recipe_id": recipe_id,
                 "recipe_name": recipe.get("name"),
                 "base_servings": recipe.get("servings", 4),
                 "scaled_servings": int(recipe.get("servings", 4) * scale),
+                "household_default_servings": get_default_servings(),
                 "scale": scale,
                 "ingredients": ingredients_preview,
                 "items_to_order": items_to_order,
@@ -755,12 +827,16 @@ def register_tools(mcp):
 
             # Preview mode - return what would be added
             if not confirm:
+                from .shared import get_default_servings
+
                 return {
                     "success": True,
                     "confirmation_required": True,
                     "preview": {
                         "recipe_name": recipe.get("name"),
+                        "recipe_base_servings": recipe.get("servings", 4),
                         "servings": int(recipe.get("servings", 4) * scale),
+                        "household_default": get_default_servings(),
                         "scale": scale,
                         "modality": modality,
                         "ingredients": ingredients_preview,

@@ -3,10 +3,15 @@ SQLite database connection and schema management for purchase analytics.
 """
 
 import sqlite3
+import os
 from contextlib import contextmanager
+from pathlib import Path
 
-# Database file location (working directory)
-DB_FILE = "kroger_analytics.db"
+# Database file location (data directory)
+# Create data directory if it doesn't exist
+_DATA_DIR = Path(__file__).parent.parent.parent.parent / "data"
+_DATA_DIR.mkdir(exist_ok=True)
+DB_FILE = str(_DATA_DIR / "kroger_analytics.db")
 
 # Global initialization flag
 _initialized = False
@@ -525,6 +530,21 @@ def run_schema_migrations() -> None:
             if col_name not in favorite_lists_columns:
                 conn.execute(
                     f"ALTER TABLE favorite_lists ADD COLUMN {col_name} {col_def}"
+                )
+
+        # Migrate pantry_items table - add expiration tracking
+        cursor = conn.execute("PRAGMA table_info(pantry_items)")
+        pantry_items_columns = {row[1] for row in cursor.fetchall()}
+
+        pantry_items_new_columns = [
+            ("expiration_date", "TEXT DEFAULT NULL"),
+            ("days_to_expiration", "INTEGER DEFAULT NULL"),
+        ]
+
+        for col_name, col_def in pantry_items_new_columns:
+            if col_name not in pantry_items_columns:
+                conn.execute(
+                    f"ALTER TABLE pantry_items ADD COLUMN {col_name} {col_def}"
                 )
 
         conn.commit()

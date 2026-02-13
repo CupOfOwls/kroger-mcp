@@ -584,16 +584,20 @@ def assign_meal(
 
     Replaces any existing recipe in that slot.
 
+    If servings_override is None, uses the user's default_servings_per_meal
+    preference instead of the recipe's base servings. This ensures meals
+    are automatically scaled to household size.
+
     Args:
         plan_id: Plan identifier
         recipe_id: Recipe to assign
         meal_date: Date YYYY-MM-DD
         meal_slot: 'breakfast', 'lunch', 'dinner', or 'snack'
-        servings_override: Override recipe default servings
+        servings_override: Override servings (None = use household default)
         notes: Optional notes
 
     Returns:
-        Confirmation of assignment
+        Confirmation of assignment with servings information
     """
     ensure_initialized()
 
@@ -610,6 +614,16 @@ def assign_meal(
             "success": False,
             "error": "Invalid meal_date format. Use YYYY-MM-DD"
         }
+
+    # Get household default servings if not overridden
+    from ..tools.shared import get_default_servings
+    household_default = get_default_servings()
+
+    if servings_override is None:
+        servings_override = household_default
+        servings_source = "household_default"
+    else:
+        servings_source = "explicit_override"
 
     conn = get_db_connection()
     try:
@@ -661,7 +675,11 @@ def assign_meal(
             "meal_slot": meal_slot,
             "recipe_id": recipe_id,
             "recipe_name": recipe.get('name'),
-            "message": f"Assigned '{recipe.get('name')}' to {meal_slot} on {meal_date}"
+            "servings": servings_override,
+            "servings_source": servings_source,
+            "household_default": household_default,
+            "recipe_base_servings": recipe.get('servings', 4),
+            "message": f"Assigned '{recipe.get('name')}' to {meal_slot} on {meal_date} ({servings_override} servings from {servings_source})"
         }
     finally:
         conn.close()

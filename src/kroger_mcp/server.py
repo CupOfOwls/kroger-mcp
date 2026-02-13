@@ -36,6 +36,7 @@ from .tools import safety_tools
 from .tools import deal_tools
 from .tools import whole_foods_tools
 from .tools import ingredient_management_tools
+from .tools import shopping_list_tools
 
 # Import prompts
 from . import prompts
@@ -123,17 +124,62 @@ def create_server() -> FastMCP:
         - get_whole_foods_catalog - View tracked whole foods
         - scan_for_whole_foods - Find qualifying products by category
 
+        User Servings Preference (Household Size):
+        Users can set their default servings per meal (household size) via
+        set_default_servings(servings). This preference is automatically used when:
+        - Creating new recipes (if servings not explicitly specified)
+        - Adding recipes to shopping list (if override not specified)
+        - Assigning recipes to meal plans (if servings_override not specified)
+        - Displaying recipe information
+
+        The current default can be retrieved with get_default_servings().
+
+        IMPORTANT: Always display servings information when discussing recipes,
+        ingredients, and shopping lists. This helps users understand quantities
+        and ensures proper scaling for their household size.
+
+        Shopping List Workflow:
+        The shopping list provides an intermediate storage layer between recipes
+        and the cart. This allows users to:
+        - Build a consolidated list from multiple recipes
+        - Review items before committing to cart
+        - Auto-scale ingredients to household servings
+        - Skip items already in pantry
+
+        Shopping list workflow:
+        1. set_default_servings(2) - Set household size (one-time setup)
+        2. get_pantry_attention() - REQUIRED before adding to list/cart
+        3. add_recipe_to_shopping_list(recipe_id) - Auto-scales to household default
+        4. get_shopping_list() - Review consolidated list
+        5. add_shopping_list_to_cart(confirm=False) - Preview what will be added
+        6. add_shopping_list_to_cart(confirm=True) - Add to cart and clear list
+
+        Session Requirement for Shopping:
+        Before adding items to shopping list OR cart, users MUST call
+        get_pantry_attention() at least once in the session. This ensures
+        they review:
+        - Items expiring soon
+        - Low inventory alerts
+        - Items overdue for repurchase
+
+        One call to get_pantry_attention() unlocks all shopping operations
+        for the remainder of the session. The requirement resets when the
+        conversation ends.
+
         Common workflows:
         1. Set a preferred location with set_preferred_location
-        2. Search for products with search_products (prices automatically tracked)
-        3. Find deals with find_deals (by category or search term)
-        4. Check product safety with check_product_safety before adding to cart
-        5. Add items to cart with add_to_cart
-        6. Use check_cart_safety to scan cart for ingredient concerns
-        7. View current cart with view_current_cart (includes savings summary)
-        8. Mark order as placed with mark_order_placed
-        9. Get purchase predictions with get_purchase_predictions
-        10. Generate smart shopping lists with get_shopping_suggestions
+        2. Set household size with set_default_servings
+        3. Search for products with search_products (prices automatically tracked)
+        4. Find deals with find_deals (by category or search term)
+        5. Check product safety with check_product_safety before adding
+        6. Review pantry with get_pantry_attention (REQUIRED for shopping)
+        7. Add recipes to shopping list with add_recipe_to_shopping_list (auto-scaled)
+        8. Review shopping list with get_shopping_list
+        9. Add to cart with add_shopping_list_to_cart or add_to_cart
+        10. Use check_cart_safety to scan cart for ingredient concerns
+        11. View current cart with view_current_cart (includes savings summary)
+        12. Mark order as placed with mark_order_placed
+        13. Get purchase predictions with get_purchase_predictions
 
         Automatic Pantry Integration:
         The system seamlessly tracks inventory for all items you purchase:
@@ -175,6 +221,7 @@ def create_server() -> FastMCP:
     deal_tools.register_tools(mcp)
     whole_foods_tools.register_tools(mcp)
     ingredient_management_tools.register_tools(mcp)
+    shopping_list_tools.register_tools(mcp)
 
     # Register prompts
     prompts.register_prompts(mcp)

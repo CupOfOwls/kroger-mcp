@@ -172,3 +172,41 @@ def format_currency(value: Optional[float]) -> str:
 def get_default_zip_code() -> str:
     """Get the default zip code from environment or fallback"""
     return get_zip_code(default="10001")
+
+
+def get_default_servings() -> int:
+    """
+    Get the user's default servings per meal preference.
+
+    Returns the household size/serving preference for recipes.
+    Defaults to 4 if not set.
+
+    Returns:
+        Number of servings (1-20)
+    """
+    preferences = _load_preferences()
+    return preferences.get("default_servings_per_meal", 4)
+
+
+def set_default_servings(servings: int) -> None:
+    """
+    Set the user's default servings per meal preference.
+
+    This preference is used when:
+    - Creating new recipes (if servings not specified)
+    - Adding recipes to shopping list (if override not specified)
+    - Assigning meals to meal plan (if override not specified)
+    - Displaying recipe information
+
+    Args:
+        servings: Number of servings (1-20)
+
+    Raises:
+        ValueError: If servings is not between 1 and 20
+    """
+    if not 1 <= servings <= 20:
+        raise ValueError("Servings must be between 1 and 20")
+
+    preferences = _load_preferences()
+    preferences["default_servings_per_meal"] = servings
+    _save_preferences(preferences)
