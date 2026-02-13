@@ -3,10 +3,15 @@ SQLite database connection and schema management for purchase analytics.
 """
 
 import sqlite3
+import os
 from contextlib import contextmanager
+from pathlib import Path
 
-# Database file location (working directory)
-DB_FILE = "kroger_analytics.db"
+# Database file location (data directory)
+# Create data directory if it doesn't exist
+_DATA_DIR = Path(__file__).parent.parent.parent.parent / "data"
+_DATA_DIR.mkdir(exist_ok=True)
+DB_FILE = str(_DATA_DIR / "kroger_analytics.db")
 
 # Global initialization flag
 _initialized = False

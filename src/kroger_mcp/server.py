@@ -39,10 +39,10 @@ from .tools import ingredient_management_tools
 from .tools import shopping_list_tools
 
 # Import prompts
-from . import prompts
+from .config import prompts
 
 # Import session state manager
-from .session_state import get_session_manager
+from .config.session_state import get_session_manager
 
 
 async def _cleanup_stale_sessions():

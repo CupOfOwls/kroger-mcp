@@ -377,7 +377,7 @@ def register_tools(mcp):
         Returns:
             Dictionary confirming item(s) added or preview
         """
-        from ..session_state import get_session_manager
+        from ..config.session_state import get_session_manager
 
         # Get session ID
         session_id = _get_session_id(ctx)

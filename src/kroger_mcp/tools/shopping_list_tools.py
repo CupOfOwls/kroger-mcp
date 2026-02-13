@@ -101,7 +101,7 @@ def _check_attention_requirement(ctx: Context) -> Optional[Dict[str, Any]]:
 
     Returns error dict if not called, None if requirement met.
     """
-    from ..session_state import get_session_manager
+    from ..config.session_state import get_session_manager
 
     session_id = _get_session_id(ctx)
     session_manager = get_session_manager()

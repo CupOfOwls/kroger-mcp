@@ -1466,7 +1466,7 @@ def register_tools(mcp):
         try:
             from ..analytics.pantry import get_pantry_status
             from ..analytics.predictions import predict_repurchase_date, get_predictions_for_period
-            from ..session_state import get_session_manager
+            from ..config.session_state import get_session_manager
 
             # Get session ID from context
             session_id = _get_session_id(ctx)
