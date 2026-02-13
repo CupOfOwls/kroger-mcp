@@ -1438,6 +1438,9 @@ def register_tools(mcp):
         """
         Get all items needing attention RIGHT NOW - expiring soon, running low, or overdue.
 
+        ⚠️ REQUIRED: This tool MUST be called at least once per session before you can
+        add items to the cart. This ensures you review what needs attention before shopping.
+
         This is the unified "what do I need to deal with?" tool. Shows:
         - Items expiring within the next N days
         - Items with low inventory (below threshold)
@@ -1451,6 +1454,9 @@ def register_tools(mcp):
         5. Low inventory (≤25% pantry level)
         6. Overdue for reorder
 
+        After calling this tool, you'll be able to use add_to_cart for the rest of
+        the session. The session requirement resets when the conversation ends.
+
         Args:
             days_ahead: How many days ahead to check for expiring items (1-30)
 
@@ -1460,6 +1466,10 @@ def register_tools(mcp):
         try:
             from ..analytics.pantry import get_pantry_status
             from ..analytics.predictions import predict_repurchase_date, get_predictions_for_period
+            from ..session_state import get_session_manager
+
+            # Get session ID from context
+            session_id = _get_session_id(ctx)
 
             # Get all pantry items with expiration status
             pantry_items = get_pantry_status(apply_depletion=True)
@@ -1554,11 +1564,16 @@ def register_tools(mcp):
                 "overdue": sum(1 for i in attention_items if i['attention_reason'] == 'overdue')
             }
 
+            # SUCCESS - Mark tool as called in this session
+            session_manager = get_session_manager()
+            session_manager.mark_tool_called(session_id, "get_pantry_attention")
+
             return {
                 "success": True,
                 "items": attention_items,
                 "summary": summary,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
+                "_session_requirement_fulfilled": True  # Hint to client
             }
 
         except Exception as e:
@@ -1566,3 +1581,15 @@ def register_tools(mcp):
                 "success": False,
                 "error": f"Failed to get pantry attention items: {str(e)}"
             }
+
+
+def _get_session_id(ctx: Context) -> str:
+    """
+    Extract session ID from MCP context.
+
+    Falls back to 'default' if no context available (testing, etc.)
+    """
+    if ctx and hasattr(ctx, 'session_id'):
+        return str(ctx.session_id)
+    # Fallback for testing or when context unavailable
+    return 'default'

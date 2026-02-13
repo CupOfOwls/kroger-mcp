@@ -16,6 +16,7 @@ Environment Variables Required:
 - KROGER_USER_ZIP_CODE: Default zip code for location searches (optional)
 """
 
+import asyncio
 from fastmcp import FastMCP
 
 # Import all tool modules
@@ -39,9 +40,23 @@ from .tools import ingredient_management_tools
 # Import prompts
 from . import prompts
 
+# Import session state manager
+from .session_state import get_session_manager
+
+
+async def _cleanup_stale_sessions():
+    """Background task to cleanup stale sessions."""
+    session_manager = get_session_manager()
+    while True:
+        await asyncio.sleep(3600)  # 1 hour
+        session_manager.cleanup_stale_sessions(max_age_hours=24)
+
 
 def create_server() -> FastMCP:
     """Create and configure the FastMCP server instance"""
+    # Initialize session cleanup task
+    asyncio.create_task(_cleanup_stale_sessions())
+
     # Initialize the FastMCP server
     mcp = FastMCP(
         name="Kroger API Server",

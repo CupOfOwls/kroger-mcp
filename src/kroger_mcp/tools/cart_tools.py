@@ -132,6 +132,18 @@ def _add_item_to_local_cart(product_id: str, quantity: int, modality: str, produ
         pass  # Don't fail cart operations if pantry add fails
 
 
+def _get_session_id(ctx: Context) -> str:
+    """
+    Extract session ID from MCP context.
+
+    Falls back to 'default' if no context available (testing, etc.)
+    """
+    if ctx and hasattr(ctx, 'session_id'):
+        return str(ctx.session_id)
+    # Fallback for testing or when context unavailable
+    return 'default'
+
+
 def register_tools(mcp):
     """Register cart-related tools with the FastMCP server"""
 
@@ -313,6 +325,14 @@ def register_tools(mcp):
         """
         Add items to the user's Kroger cart. Supports single or batch operations.
 
+        ⚠️ PREREQUISITE: You MUST call get_pantry_attention() at least once per session
+        before using this tool. This ensures you review what items need attention
+        (expiring, low inventory, overdue) before adding new items to your cart.
+
+        If you haven't called get_pantry_attention() yet this session, this operation
+        will be blocked with an error. Simply call get_pantry_attention() first, then
+        you can freely add items to cart for the rest of the session.
+
         SINGLE MODE (items is a string):
             add_to_cart(items="0001111041700", quantity=2, modality="PICKUP")
 
@@ -357,6 +377,31 @@ def register_tools(mcp):
         Returns:
             Dictionary confirming item(s) added or preview
         """
+        from ..session_state import get_session_manager
+
+        # Get session ID
+        session_id = _get_session_id(ctx)
+
+        # HARD REQUIREMENT CHECK
+        session_manager = get_session_manager()
+        if not session_manager.was_tool_called(session_id, "get_pantry_attention"):
+            return {
+                "success": False,
+                "error": "Session requirement not met",
+                "error_code": "ATTENTION_REQUIRED",
+                "message": (
+                    "You must call get_pantry_attention() at least once before adding "
+                    "items to cart. This ensures you review what needs attention "
+                    "(expiring items, low inventory, overdue reorders) before shopping.\n\n"
+                    "To fix: Call get_pantry_attention() first, then retry add_to_cart."
+                ),
+                "required_action": {
+                    "tool": "get_pantry_attention",
+                    "reason": "Review items needing attention before shopping",
+                    "required_before": ["add_to_cart", "add items to cart"]
+                }
+            }
+
         try:
             # Normalize input to list of item dicts
             if isinstance(items, str):
