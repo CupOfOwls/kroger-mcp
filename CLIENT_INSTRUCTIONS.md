@@ -45,9 +45,9 @@ Conroe, TX
 
 Before any shopping operation, verify the preferred location is set:
 ```
-1. Use get_preferred_location to check current setting
-2. If not set to the Conroe location, use search_locations with "Conroe, TX"
-3. Find the store at "336 North Loop" and use set_preferred_location
+1. Use locations(action='get_preferred') to check current setting
+2. If not set to the Conroe location, use locations(action='search') with "Conroe, TX"
+3. Find the store at "336 North Loop" and use locations(action='set_preferred')
 ```
 
 ---
@@ -167,12 +167,12 @@ When asked to create a recipe or meal plan:
 ### Step 4: Add to Cart
 - Confirm quantities based on recipe needs
 - Ask user preference: PICKUP or DELIVERY
-- Use add_to_cart with a list for efficiency
+- Use `cart(action='add')` with a list for efficiency
 - Confirm all items were added successfully
 
 ### Step 5: Save the Recipe (Optional)
 - Ask if user wants to save the recipe for future use
-- Use `save_recipe` to store with all ingredients and Kroger product links
+- Use `recipes(action='save')` to store with all ingredients and Kroger product links
 - Next time, they can reorder with one command!
 
 ---
@@ -183,7 +183,7 @@ When asked to create a recipe or meal plan:
 After creating a recipe, save it for future use:
 
 ```
-Use save_recipe with:
+Use recipes(action='save') with:
 - name: "Classic Carbonara"
 - ingredients: [{name, quantity, unit, product_id}, ...]
 - servings: 4
@@ -200,12 +200,12 @@ Uses the **confirmation workflow** to prevent accidental cart modifications:
 User: "Order my carbonara recipe, but I already have eggs and pasta"
 
 Workflow:
-1. Use search_recipes to find "carbonara"
-2. PREVIEW: Use add_recipe_to_cart_with_confirmation with confirm=False
+1. Use recipes(action='search') to find "carbonara"
+2. PREVIEW: Use recipes(action='add_to_cart') with confirm=False
    - Shows what will be added vs skipped
    - Includes pantry status for each ingredient
 3. Show user the preview, ask for confirmation
-4. EXECUTE: Use add_recipe_to_cart_with_confirmation with confirm=True
+4. EXECUTE: Use recipes(action='add_to_cart') with confirm=True
    and skip_items=["eggs", "pasta"]
 ```
 
@@ -213,15 +213,20 @@ Workflow:
 
 | Tool | Purpose |
 |------|---------|
-| `save_recipe` | Save a new recipe with ingredients |
-| `get_recipes` | List all saved recipes |
-| `get_recipe` | Get full recipe details |
-| `search_recipes` | Find recipes by name or tag |
-| `update_recipe` | Modify an existing recipe |
-| `delete_recipe` | Remove a saved recipe |
-| `preview_recipe_order` | Preview order with skip options |
-| `add_recipe_to_cart_with_confirmation` | Order with 2-step confirmation workflow |
-| `link_ingredient_to_product` | Link ingredient to Kroger product |
+| `recipes(action='save')` | Save a new recipe with ingredients |
+| `recipes(action='list')` | List all saved recipes |
+| `recipes(action='get')` | Get full recipe details |
+| `recipes(action='search')` | Find recipes by name or tag |
+| `recipes(action='update')` | Modify an existing recipe |
+| `recipes(action='delete')` | Remove a saved recipe |
+| `recipes(action='preview_order')` | Preview order with skip options |
+| `recipes(action='add_to_cart')` | Order with 2-step confirmation workflow |
+| `recipes(action='link_ingredient')` | Link ingredient(s) to Kroger product (single or batch) |
+| `recipes(action='add_sub_recipe')` | Link a sub-recipe or side (single or batch via `sub_recipe_links`) |
+| `recipes(action='update_sub_recipe')` | Update `servings_override` or `relationship` of a linked sub-recipe/side |
+| `recipes(action='remove_sub_recipe')` | Unlink a sub-recipe or side |
+| `recipes(action='list_sub_recipes')` | List all linked sub-recipes and sides (includes child info) |
+| `recipes(action='generate_merged_steps')` | Generate a merged cooking plan across parent + all children |
 
 ### Skip Items Feature
 
@@ -236,30 +241,87 @@ Order ingredients for different serving sizes:
 - `scale=2.0` → Double the recipe (8 servings instead of 4)
 - `scale=0.5` → Half the recipe (2 servings instead of 4)
 
+### Sub-Recipes & Side Dishes
+
+Recipes can be composed from other recipes using two relationship types:
+
+- **sub_recipe** - A component that's part of the main dish (e.g., homemade pasta dough for carbonara, sauce for lasagna)
+- **side** - An accompaniment served alongside the main dish (e.g., garlic bread with pasta, coleslaw with BBQ)
+
+Sub-recipes inherit the parent's scaling by default. Use `servings_override` to fix a child at a specific serving count regardless of parent scaling.
+
+**Single add:**
+```
+recipes(action='add_sub_recipe', recipe_id='<parent>', sub_recipe_id='<child>', relationship='side')
+```
+
+**Batch add** (link multiple children at once):
+```
+recipes(action='add_sub_recipe', recipe_id='<parent>', sub_recipe_links=[
+  {"sub_recipe_id": "<sauce_id>", "relationship": "sub_recipe"},
+  {"sub_recipe_id": "<bread_id>", "relationship": "side", "servings_override": 4},
+  {"sub_recipe_id": "<salad_id>", "relationship": "side"}
+])
+```
+Returns per-item results plus the updated composition summary.
+
+**Update a link** (change servings or relationship without remove+re-add):
+```
+recipes(action='update_sub_recipe', recipe_id='<parent>', sub_recipe_id='<child>',
+        servings_override=6)
+```
+Pass `servings_override` as `null`/omit to clear (revert to inheriting parent scale).
+Change `relationship` to move between sub_recipe and side.
+
+**Remove:**
+```
+recipes(action='remove_sub_recipe', recipe_id='<parent>', sub_recipe_id='<child>')
+```
+
+**List composition:**
+```
+recipes(action='list_sub_recipes', recipe_id='<parent>')
+```
+Shows all linked children with `has_sub_recipes`, `has_sides`, and `child_count` to indicate nested composition.
+
+**Merged cooking plan:**
+```
+recipes(action='generate_merged_steps', recipe_id='<parent>')
+```
+Combines steps from parent + all children, grouped by phase (prep/cook/rest/serve) with timing hints.
+
+**Typical workflow:**
+1. Save individual recipes (main dish, sauce, side)
+2. Link them: `add_sub_recipe` (single or batch)
+3. Preview composition: `list_sub_recipes`
+4. Preview ingredients: `preview_order` (includes all sub-recipe ingredients)
+5. Add to shopping list or cart
+6. Cook using `generate_merged_steps` for an optimized cooking plan
+
 ---
 
 ## Smart Shopping Features
 
 ### Predict What You Need
-Use `get_purchase_predictions` to:
+Use `predictions(action='get_predictions')` to:
 - See items you'll likely need soon
 - Identify overdue repurchases
 - Plan shopping trips efficiently
 
 ```
 Example: "What groceries will I need in the next week?"
-→ Use get_purchase_predictions with days_ahead=7
+→ Use predictions(action='get_predictions') with days_ahead=7
 → Show items by urgency (critical → high → medium → low)
 ```
 
 ### Smart Shopping Lists
-Use `get_shopping_suggestions` to:
+Use `predictions(action='get_suggestions')` to:
 - Combine routine needs + predictions + seasonal items
 - Never forget essentials
 - Prepare for upcoming holidays
 
 ### Track Your Patterns
-Use `get_item_statistics` to understand:
+Use `predictions(action='get_stats')` to understand:
 - How often you buy specific items
 - Your consumption patterns
 - When you'll need to restock
@@ -270,19 +332,19 @@ Items are auto-categorized, but you can override:
 - **regular**: Occasional purchases (spices, cleaning supplies)
 - **treat**: Holiday/seasonal items (turkey, candy corn)
 
-Use `categorize_item` to manually adjust categories.
+Use `predictions(action='categorize')` to manually adjust categories.
 
 ### Batch Product Search
-Use `search_products` with a list for efficient multi-term searches:
+Use `products(action='search')` with a list for efficient multi-term searches:
 
 ```
 # Less efficient - 5 separate tool calls
-search_products(search_term="milk")
-search_products(search_term="bread")
-search_products(search_term="eggs")
+products(action='search', search_term="milk")
+products(action='search', search_term="bread")
+products(action='search', search_term="eggs")
 
 # More efficient - 1 tool call with parallel execution
-search_products(search_term=["milk", "bread", "eggs", "butter", "cheese"])
+products(action='search', search_term=["milk", "bread", "eggs", "butter", "cheese"])
 ```
 
 Benefits:
@@ -309,26 +371,27 @@ Prices are recorded automatically whenever you search or view products (zero API
 
 **Search for deals by category:**
 ```
-find_deals(category='dairy', min_savings_percent=20)
+deals(action='find', category='dairy', min_savings_percent=20)
 ```
 
 Categories available: `dairy`, `meat`, `produce`, `bakery`, `frozen`, `beverages`
 
 **Search for specific items on sale:**
 ```
-find_deals(search_term='milk', min_savings_percent=15)
+deals(action='find', search_term='milk', min_savings_percent=15)
 ```
 
 **Find best deals across all categories:**
 ```
-find_deals(sort_by='savings_percent', limit=50)
+deals(action='find', sort_by='savings_percent', limit=50)
 ```
 
 ### Track Specific Items
 
 **Add items to watchlist for price monitoring:**
 ```
-add_to_watchlist(
+deals(
+    action='add_to_watchlist',
     product_id='0001111041700',
     target_price=3.00,
     priority=3  # High priority = checked daily
@@ -342,7 +405,8 @@ Priority levels:
 
 **Check watchlist for deals:**
 ```
-scan_watchlist_for_deals(
+deals(
+    action='scan_watchlist',
     include_favorites=True,
     include_pantry=True,
     max_items=50
@@ -350,7 +414,7 @@ scan_watchlist_for_deals(
 ```
 
 This creates a smart watchlist from:
-- Explicit watchlist items (added via `add_to_watchlist`)
+- Explicit watchlist items (added via `deals(action='add_to_watchlist')`)
 - Favorite list items
 - Low pantry items (<=25% quantity)
 - Recent purchases (last 30 days)
@@ -358,7 +422,7 @@ This creates a smart watchlist from:
 ### View Price History
 
 ```
-get_price_history(product_id='0001111041700', days=30)
+deals(action='get_price_history', product_id='0001111041700', days=30)
 ```
 
 Returns:
@@ -372,17 +436,17 @@ Returns:
 
 **Prioritize sale items in search:**
 ```
-search_products(query='milk', sort_by_deals=True)
+products(action='search', search_term='milk', sort_by_deals=True)
 ```
 
 **Get suggestions with sale priority:**
 ```
-get_shopping_suggestions(prioritize_sales=True)
+predictions(action='get_suggestions', prioritize_sales=True)
 ```
 
 **View cart savings:**
 ```
-view_current_cart()
+cart(action='view')
 ```
 Shows total savings and which items are on sale.
 
@@ -404,16 +468,16 @@ Look for these flags:
 ```
 User: "I need to buy milk but want to find the best deal"
 
-1. find_deals(search_term='milk', min_savings_percent=10)
+1. deals(action='find', search_term='milk', min_savings_percent=10)
    → Shows all milk products on sale with 10%+ discount
 
-2. get_price_history(product_id='0001111041700', days=30)
+2. deals(action='get_price_history', product_id='0001111041700', days=30)
    → Shows this is the lowest price in 30 days
 
-3. add_to_cart(items='0001111041700', quantity=2)
+3. cart(action='add', items='0001111041700', quantity=2)
    → Adds to cart and records price
 
-4. view_current_cart()
+4. cart(action='view')
    → Shows savings summary: "Total savings: $3.00 (20.1%)"
 ```
 
@@ -425,9 +489,9 @@ Track estimated inventory levels for items in your pantry. The system auto-deple
 
 ### How It Works
 
-1. **Add items to pantry**: Use `add_to_pantry` to start tracking
+1. **Add items to pantry**: Use `pantry(action='add')` to start tracking
 2. **Auto-depletion**: System estimates daily usage from your purchase history
-3. **Manual adjustments**: Correct levels anytime with `update_pantry_item`
+3. **Manual adjustments**: Correct levels anytime with `pantry(action='update')`
 4. **Low alerts**: Get warned when items drop below threshold (default 20%)
 5. **Auto-restock**: When you place an order, tracked items reset to 100%
 
@@ -435,17 +499,17 @@ Track estimated inventory levels for items in your pantry. The system auto-deple
 
 | Tool | Purpose |
 |------|---------|
-| `get_pantry` | View all pantry items with levels |
-| `update_pantry_item` | Manually set level (0-100%) |
-| `restock_pantry_item` | Mark as restocked (100%) |
-| `get_low_inventory` | Get items running low |
-| `add_to_pantry` | Start tracking an item |
-| `remove_from_pantry` | Stop tracking an item |
+| `pantry(action='get')` | View all pantry items with levels |
+| `pantry(action='update')` | Manually set level (0-100%) |
+| `pantry(action='restock')` | Mark as restocked (100%) |
+| `pantry(action='get_low')` | Get items running low |
+| `pantry(action='add')` | Start tracking an item |
+| `pantry(action='remove')` | Stop tracking an item |
 
 ### Example Pantry Output
 
 ```
-get_pantry returns:
+pantry(action='get') returns:
 [
   {
     "product_id": "123",
@@ -471,18 +535,18 @@ get_pantry returns:
 ```
 User: "What's running low in my pantry?"
 
-1. Use get_low_inventory to find items below threshold
+1. Use pantry(action='get_low') to find items below threshold
 2. Show items with their estimated levels and days until empty
 3. Offer to add low items to cart
 
 User: "I'm actually out of milk"
 
-1. Use update_pantry_item with product_id and level=0
+1. Use pantry(action='update') with product_id and level=0
 2. Offer to search and add milk to cart
 
 User: "I just bought eggs at Costco"
 
-1. Use restock_pantry_item to mark eggs as 100%
+1. Use pantry(action='restock') to mark eggs as 100%
 2. System updates depletion tracking
 ```
 
@@ -525,27 +589,28 @@ Since Kroger's Public API doesn't support shopping lists, this system provides *
 
 | Tool | Purpose |
 |------|---------|
-| `create_favorite_list` | Create a new named list (with optional reorder schedule) |
-| `get_favorite_lists` | View all lists with item counts and reorder status |
-| `rename_favorite_list` | Rename or update description |
-| `delete_favorite_list` | Delete a list (cannot delete default) |
-| `add_to_favorite_list` | Add product(s) to a list (single or bulk) |
-| `remove_from_favorite_list` | Remove product from list |
-| `get_favorite_list_items` | View items with pantry status |
-| `order_favorite_list` | Order list items to cart (shows if overdue) |
-| `update_list_schedule` | Set or update reorder schedule for a list |
-| `suggest_favorites` | Get suggestions from purchase history |
+| `favorite_lists(action='create')` | Create a new named list (with optional reorder schedule) |
+| `favorite_lists(action='list')` | View all lists with item counts and reorder status |
+| `favorite_lists(action='rename')` | Rename or update description |
+| `favorite_lists(action='delete')` | Delete a list (cannot delete default) |
+| `favorite_lists(action='add_item')` | Add product(s) to a list (single or bulk) |
+| `favorite_lists(action='remove_item')` | Remove product from list |
+| `favorite_lists(action='get_items')` | View items with pantry status |
+| `favorite_lists(action='order')` | Order list items to cart (shows if overdue) |
+| `favorite_lists(action='update_schedule')` | Set or update reorder schedule for a list |
+| `favorite_lists(action='suggest')` | Get suggestions from purchase history |
 
 ### Example List Workflow
 
 ```
 User: "Create a weekly staples list"
-→ create_favorite_list(name="Weekly Staples", list_type="weekly")
+→ favorite_lists(action='create', name="Weekly Staples", list_type="weekly")
 → Returns: list_id="weekly-staples-abc123"
 
 User: "Add organic milk and eggs to my weekly staples"
-→ search_products(search_term=["organic milk", "eggs"]) → get product_ids
-→ add_to_favorite_list(
+→ products(action='search', search_term=["organic milk", "eggs"]) → get product_ids
+→ favorite_lists(
+    action='add_item',
     list_id="weekly-staples-abc123",
     items=[
         {"product_id": product_id_1, "description": "Organic Milk"},
@@ -554,7 +619,7 @@ User: "Add organic milk and eggs to my weekly staples"
   )
 
 User: "Order my weekly staples"
-→ order_favorite_list(list_id="weekly-staples-abc123", skip_if_stocked=True)
+→ favorite_lists(action='order', list_id="weekly-staples-abc123", skip_if_stocked=True)
 → Shows: "Added 5 items, skipped 3 (well-stocked in pantry)"
 ```
 
@@ -564,7 +629,8 @@ Set a recurring schedule on lists to get reminders when they're due for reorder.
 
 **Create a list with a schedule:**
 ```
-create_favorite_list(
+favorite_lists(
+    action='create',
     name="Weekly Groceries",
     list_type="weekly",
     reorder_weeks=2  # Reorder every 2 weeks
@@ -579,7 +645,7 @@ create_favorite_list(
 
 **View reorder status:**
 ```
-get_favorite_lists() returns:
+favorite_lists(action='list') returns:
 [
   {
     "name": "Weekly Groceries",
@@ -603,17 +669,17 @@ get_favorite_lists() returns:
 
 **When ordering shows overdue status:**
 ```
-order_favorite_list(list_id="weekly-groceries-abc123")
+favorite_lists(action='order', list_id="weekly-groceries-abc123")
 → Shows: "Added 8 items, skipped 2 (This list was OVERDUE for reorder)"
 → Response includes: reorder_status.was_overdue=true, next_due="2026-02-13"
 ```
 
 **Update schedule on existing list:**
 ```
-update_list_schedule(list_id="weekly-groceries-abc123", reorder_weeks=1)
+favorite_lists(action='update_schedule', list_id="weekly-groceries-abc123", reorder_weeks=1)
 → Changes from 2-week to 1-week schedule
 
-update_list_schedule(list_id="weekly-groceries-abc123", reorder_weeks=None)
+favorite_lists(action='update_schedule', list_id="weekly-groceries-abc123", reorder_weeks=None)
 → Disables the schedule entirely
 ```
 
@@ -635,8 +701,8 @@ When you order a favorite list, the system checks pantry levels:
 
 A "My Favorites" list is auto-created. Use it for quick favorites without creating custom lists:
 ```
-add_to_favorite_list(product_id, description)  # Uses default list
-order_favorite_list()  # Orders from default list
+favorite_lists(action='add_item', product_id=..., description=...)  # Uses default list
+favorite_lists(action='order')  # Orders from default list
 ```
 
 ### Bulk Adding Items
@@ -645,8 +711,9 @@ For efficiency, add multiple items at once using the `items` parameter:
 
 ```
 User: "Add milk, eggs, and bread to my weekly staples"
-→ search_products(search_term=["milk", "eggs", "bread"]) → get all product_ids in one call
-→ add_to_favorite_list(
+→ products(action='search', search_term=["milk", "eggs", "bread"]) → get all product_ids in one call
+→ favorite_lists(
+    action='add_item',
     list_id="weekly-staples-abc123",
     items=[
         {"product_id": "001", "description": "Milk 2%", "default_quantity": 2},
@@ -684,34 +751,41 @@ Plan your weekly or monthly meals by assigning saved recipes to specific days an
 
 | Tool | Purpose |
 |------|---------|
-| `create_meal_plan` | Create a new meal plan for a date range |
-| `get_meal_plans` | List all meal plans with summary info |
-| `get_meal_plan` | Get full details of a specific plan |
-| `update_meal_plan` | Update plan name, description, or dates |
-| `delete_meal_plan` | Delete a plan and all its meal entries |
-| `copy_meal_plan` | Copy a plan to a new date range |
+| `meal_plans(action='create')` | Create a new meal plan for a date range |
+| `meal_plans(action='list')` | List all meal plans with summary info |
+| `meal_plans(action='get')` | Get full details of a specific plan |
+| `meal_plans(action='update')` | Update plan name, description, or dates |
+| `meal_plans(action='delete')` | Delete a plan and all its meal entries |
+| `meal_plans(action='copy')` | Copy a plan to a new date range |
 
 ### Meal Assignment Tools
 
 | Tool | Purpose |
 |------|---------|
-| `assign_meal` | Assign recipe(s) to day/slot (single or batch) |
-| `remove_meal` | Remove a recipe from a meal slot |
-| `swap_meals` | Swap two meal assignments |
+| `meal_plans(action='assign_meal')` | Assign recipe(s) to day/slot (single or batch) |
+| `meal_plans(action='remove_meal')` | Remove a recipe from a meal slot |
+| `meal_plans(action='swap_meals')` | Swap two meal assignments |
 
 ### Shopping Integration Tools
 
 | Tool | Purpose |
 |------|---------|
-| `preview_meal_plan_shopping` | Preview shopping list for meal plan(s) |
-| `add_meal_plan_to_cart` | Add ingredients to cart with confirmation workflow |
+| `meal_plans(action='preview_shopping')` | Preview shopping list for meal plan(s) |
+| `meal_plans(action='add_to_cart')` | Add ingredients to cart with confirmation workflow |
 
 ### Utility Tools
 
 | Tool | Purpose |
 |------|---------|
-| `get_week_view` | Calendar-style view of meals for a week |
-| `get_meal_plan_summary` | Summary statistics for a meal plan |
+| `meal_plans(action='get_week_view')` | Calendar-style view of meals for a week |
+| `meal_plans(action='get_summary')` | Summary statistics for a meal plan |
+| `meal_plans(action='mark_cooked')` | Mark a meal as cooked and deduct from pantry |
+| `meal_plans(action='check_pantry')` | Check if pantry has enough for a specific meal |
+| `meal_plans(action='get_today')` | Today's planned meals by slot |
+| `meal_plans(action='get_next_meal')` | Next upcoming planned meal |
+| `meal_plans(action='get_upcoming')` | Upcoming meals for next N days |
+| `meal_plans(action='get_history')` | Past meals with cooked/planned status |
+| `meal_plans(action='cleanup')` | Prune expired plans (90-day retention default) |
 
 ### Creating a Meal Plan
 
@@ -719,7 +793,8 @@ Plan your weekly or monthly meals by assigning saved recipes to specific days an
 User: "Help me plan next week's meals"
 
 1. Create the plan:
-   create_meal_plan(
+   meal_plans(
+       action='create',
        name="Week of Feb 3",
        start_date="2026-02-03",
        plan_type="weekly"
@@ -727,7 +802,8 @@ User: "Help me plan next week's meals"
    → Returns: plan_id="abc12345"
 
 2. Assign recipes to days:
-   assign_meal(
+   meal_plans(
+       action='assign_meal',
        plan_id="abc12345",
        recipe_id="carbonara-xyz",
        meal_date="2026-02-03",
@@ -737,10 +813,11 @@ User: "Help me plan next week's meals"
 
 ### Bulk Assigning Meals
 
-Set up a full week at once using `assign_meal` with an assignments list:
+Set up a full week at once using `meal_plans(action='assign_meal')` with an assignments list:
 
 ```
-assign_meal(
+meal_plans(
+    action='assign_meal',
     plan_id="abc12345",
     assignments=[
         {"recipe_id": "oatmeal-123", "meal_date": "2026-02-03", "meal_slot": "breakfast"},
@@ -771,17 +848,19 @@ Save meal plans as templates for reuse:
 
 ```
 # Create a template
-create_meal_plan(
+meal_plans(
+    action='create',
     name="My Healthy Week Template",
     start_date="2026-01-01",  # Dates don't matter for templates
     is_template=True
 )
 
 # List templates
-get_meal_plans(include_templates=True)
+meal_plans(action='list', include_templates=True)
 
 # Copy template to actual dates
-copy_meal_plan(
+meal_plans(
+    action='copy',
     source_plan_id="template-123",
     new_name="Week of Feb 10",
     new_start_date="2026-02-10"
@@ -792,7 +871,8 @@ copy_meal_plan(
 
 **Step 1: Preview (confirm=False)**
 ```
-add_meal_plan_to_cart(
+meal_plans(
+    action='add_to_cart',
     plan_id="abc12345",
     confirm=False  # Preview only, doesn't add to cart
 )
@@ -819,7 +899,8 @@ Total: $24.47 for 3 items
 
 **Step 2: Execute (confirm=True)**
 ```
-add_meal_plan_to_cart(
+meal_plans(
+    action='add_to_cart',
     plan_id="abc12345",
     skip_items=["chicken"],  # Skip additional items
     modality="PICKUP",
@@ -833,10 +914,11 @@ Shop for meals across multiple plans:
 
 ```
 # Next 7 days
-add_meal_plan_to_cart(days_ahead=7, confirm=False)
+meal_plans(action='add_to_cart', days_ahead=7, confirm=False)
 
 # Specific date range
-add_meal_plan_to_cart(
+meal_plans(
+    action='add_to_cart',
     start_date="2026-02-03",
     end_date="2026-02-09",
     confirm=False
@@ -853,7 +935,8 @@ The system automatically:
 
 Adjust the threshold:
 ```
-add_meal_plan_to_cart(
+meal_plans(
+    action='add_to_cart',
     plan_id="abc12345",
     pantry_threshold=20,  # More aggressive - only skip if >20%
     confirm=False
@@ -865,7 +948,7 @@ add_meal_plan_to_cart(
 Get a calendar-style overview:
 
 ```
-get_week_view(start_date="2026-02-03")
+meal_plans(action='get_week_view', start_date="2026-02-03")
 
 Returns:
 Monday (Feb 3):
@@ -887,7 +970,7 @@ Tuesday (Feb 4):
 Get statistics and readiness check:
 
 ```
-get_meal_plan_summary(plan_id="abc12345")
+meal_plans(action='get_summary', plan_id="abc12345")
 
 Returns:
 Plan: Week of Feb 3
@@ -915,22 +998,95 @@ Pantry Readiness:
 ```
 User: "Help me set up next week's meals"
 
-1. Use get_recipes to show saved recipes
-2. Create meal plan with create_meal_plan
+1. Use recipes(action='list') to show saved recipes
+2. Create meal plan with meal_plans(action='create')
 3. Discuss meal preferences with user
-4. Assign meals with bulk_assign_meals
-5. Show week view with get_week_view
+4. Assign meals with meal_plans(action='assign_meal') using bulk assignments
+5. Show week view with meal_plans(action='get_week_view')
 6. Ask if user wants to shop now
 
 User: "Order the ingredients"
 
-1. Preview with add_meal_plan_to_cart(confirm=False)
+1. Preview with meal_plans(action='add_to_cart', confirm=False)
 2. Show items that will be added vs skipped
 3. Ask about PICKUP/DELIVERY preference
 4. Get explicit confirmation
-5. Execute with add_meal_plan_to_cart(confirm=True)
+5. Execute with meal_plans(action='add_to_cart', confirm=True)
 6. Remind to review cart in Kroger app
 ```
+
+### Meal Plan History & Upcoming
+
+View what's planned next and recall past meals. Plans are retained for **90 days after their end date** and then eligible for cleanup.
+
+#### History & Upcoming Tools
+
+| Tool | Purpose |
+|------|---------|
+| `meal_plans(action='get_today')` | Show today's breakfast / lunch / dinner / snack |
+| `meal_plans(action='get_next_meal')` | The very next upcoming planned meal from now |
+| `meal_plans(action='get_upcoming')` | Planned meals for the next N days |
+| `meal_plans(action='get_history')` | Past meals with cooked/planned status |
+| `meal_plans(action='cleanup')` | Prune plans older than retention window |
+
+**Today's meals** (start-of-day check):
+```
+meal_plans(action='get_today')
+
+Returns:
+{
+  "date": "2026-02-26",
+  "meals": {
+    "breakfast": {"recipe_name": "Overnight Oats", "was_cooked": false, ...},
+    "lunch": null,
+    "dinner": {"recipe_name": "Carbonara", "was_cooked": false, ...},
+    "snack": null
+  },
+  "meal_count": 2
+}
+```
+
+**Next upcoming meal** (quick "what's for dinner?" check):
+```
+meal_plans(action='get_next_meal')
+
+Returns:
+{
+  "meal": {
+    "recipe_name": "Carbonara",
+    "meal_date": "2026-02-26",
+    "meal_slot": "dinner",
+    "plan_name": "Week of Feb 24",
+    "was_cooked": false
+  }
+}
+```
+
+**Upcoming week preview:**
+```
+meal_plans(action='get_upcoming', days=7)
+```
+Returns a day-by-day list with each slot filled or null. Use `start_date` to view a future period.
+
+**Meal history with cooked status** (last 2 weeks):
+```
+meal_plans(action='get_history', days=14)
+```
+Each meal includes a `cooked_label`:
+- `"✓ Cooked"` — meal was marked cooked via `mark_cooked`
+- `"— Planned (not marked cooked)"` — was planned but cooked status not recorded
+
+Use `start_date` / `end_date` for a specific date range:
+```
+meal_plans(action='get_history', start_date="2026-02-01", end_date="2026-02-14")
+```
+
+**Manual cleanup** (prune expired plans):
+```
+meal_plans(action='cleanup')                    # default 90-day retention
+meal_plans(action='cleanup', retention_days=30) # more aggressive pruning
+```
+Returns count of removed plans. Plans deleted here take their meal entries with them (cascade delete).
 
 ---
 
@@ -995,10 +1151,11 @@ The system tracks 62+ ingredients across three severity levels:
 
 ```
 1. Search for product:
-   search_products(search_term="yogurt")
+   products(action='search', search_term="yogurt")
 
 2. Check safety of results:
-   check_product_safety(
+   safety_check(
+       action='check_product',
        product_id="0001111041700",
        description="Vanilla Yogurt with Aspartame"
    )
@@ -1012,7 +1169,7 @@ The system tracks 62+ ingredients across three severity levels:
 **Scan entire cart:**
 
 ```
-check_cart_safety()
+safety_check(action='check_cart')
 
 Returns:
 - safe_items: Products with no concerns
@@ -1024,14 +1181,14 @@ Returns:
 
 | Tool | Purpose |
 |------|---------|
-| `check_product_safety` | Check single product for bad ingredients |
-| `check_products_safety` | Batch check up to 50 products |
-| `check_cart_safety` | Scan entire cart for concerns |
-| `get_bad_ingredients_list` | View all 62+ flagged ingredients |
-| `configure_safety_settings` | Enable/disable filtering, set block mode |
-| `approve_product` | Add to safe list (bypasses checks) |
-| `block_product` | Add to blocked list (requires confirmation) |
-| `toggle_ingredient_check` | Enable/disable specific ingredient checks |
+| `safety_check(action='check_product')` | Check single product for bad ingredients |
+| `safety_check(action='check_products')` | Batch check up to 50 products |
+| `safety_check(action='check_cart')` | Scan entire cart for concerns |
+| `safety_check(action='get_ingredients_list')` | View all 62+ flagged ingredients |
+| `safety_check(action='configure_settings')` | Enable/disable filtering, set block mode |
+| `safety_products(action='approve')` | Add to safe list (bypasses checks) |
+| `safety_products(action='block')` | Add to blocked list (requires confirmation) |
+| `safety_check(action='toggle_ingredient')` | Enable/disable specific ingredient checks |
 
 ### Block Modes
 
@@ -1042,14 +1199,15 @@ Configure how flagged products are handled:
 - **warn_only**: Show warnings only, no blocking
 
 ```
-configure_safety_settings(block_mode="soft")
+safety_check(action='configure_settings', block_mode="soft")
 ```
 
 ### Personal Safe/Blocked Lists
 
 **Safe List**: Products you've verified and want to bypass checks:
 ```
-approve_product(
+safety_products(
+    action='approve',
     product_id="0001111041700",
     description="Organic Greek Yogurt",
     reason="Verified clean ingredients"
@@ -1058,7 +1216,8 @@ approve_product(
 
 **Blocked List**: Products you never want to purchase:
 ```
-block_product(
+safety_products(
+    action='block',
     product_id="0001111099999",
     description="Ultra-Processed Snack",
     reason="Contains multiple CRITICAL ingredients"
@@ -1071,16 +1230,16 @@ Disable checking for specific ingredients if you're not concerned about them:
 
 ```
 # View available ingredients
-get_bad_ingredients_list(severity="warning")
+safety_check(action='get_ingredients_list', severity="warning")
 
 # Disable a specific check
-toggle_ingredient_check(ingredient_key="sucralose", enabled=False)
+safety_check(action='toggle_ingredient', ingredient_key="sucralose", enabled=False)
 
 # View your overrides
-get_ingredient_preferences()
+safety_check(action='get_preferences')
 
 # Reset to defaults
-reset_ingredient_preferences()
+safety_check(action='reset_preferences')
 ```
 
 ---
@@ -1105,8 +1264,8 @@ reset_ingredient_preferences()
 **User:** "What should I buy this week?"
 
 **Response:**
-1. Use get_purchase_predictions for 7-day forecast
-2. Use get_shopping_suggestions for comprehensive list
+1. Use `predictions(action='get_predictions')` for 7-day forecast
+2. Use `predictions(action='get_suggestions')` for comprehensive list
 3. Group by urgency and category
 4. Highlight any items that are overdue
 5. Offer to add recommended items to cart
@@ -1127,10 +1286,11 @@ Would you like me to search for any of these options?"
 
 **Response (Confirmation Workflow):**
 
-1. Search saved recipes for "carbonara"
+1. Search saved recipes for "carbonara" using `recipes(action='search')`
 2. **STEP 1 - Preview (confirm=False):**
    ```
-   add_recipe_to_cart_with_confirmation(
+   recipes(
+       action='add_to_cart',
        recipe_id="carbonara-abc123",
        skip_items=["eggs", "cheese"],
        confirm=False
@@ -1155,7 +1315,8 @@ Would you like me to search for any of these options?"
 5. Ask: "Ready to add these to your cart?"
 6. **STEP 2 - Execute (confirm=True) after user says yes:**
    ```
-   add_recipe_to_cart_with_confirmation(
+   recipes(
+       action='add_to_cart',
        recipe_id="carbonara-abc123",
        skip_items=["eggs", "cheese"],
        modality="PICKUP",
@@ -1169,7 +1330,7 @@ Would you like me to search for any of these options?"
 ## Seasonal Awareness
 
 ### Holiday Cooking
-The system tracks seasonal patterns. Use `get_seasonal_items` before major holidays:
+The system tracks seasonal patterns. Use `predictions(action='get_seasonal')` before major holidays:
 - **Thanksgiving**: Turkey, stuffing ingredients, cranberries, pie supplies
 - **Christmas**: Ham, eggnog, baking ingredients
 - **Easter**: Lamb, eggs, spring vegetables
@@ -1194,7 +1355,7 @@ All cart-modifying operations MUST follow this confirmation workflow to prevent 
 
 **Step 1: Check Context First**
 ```
-Call get_shopping_context() with product IDs to see:
+Call cart(action='get_context') with product IDs to see:
 - Current pantry levels for tracked items
 - Which favorite lists contain these products
 - Items suggested to skip (pantry > 30%)
@@ -1227,11 +1388,12 @@ Call get_shopping_context() with product IDs to see:
 
 ### Recipe Cart Operations
 
-For recipes, ALWAYS use `add_recipe_to_cart_with_confirmation`:
+For recipes, ALWAYS use `recipes(action='add_to_cart')`:
 
 ```
 # Step 1: Preview (confirm=False)
-add_recipe_to_cart_with_confirmation(
+recipes(
+    action='add_to_cart',
     recipe_id="abc123",
     confirm=False  # Shows preview, does NOT add to cart
 )
@@ -1239,7 +1401,8 @@ add_recipe_to_cart_with_confirmation(
 # Show user the preview, get confirmation
 
 # Step 2: Execute (confirm=True)
-add_recipe_to_cart_with_confirmation(
+recipes(
+    action='add_to_cart',
     recipe_id="abc123",
     skip_items=["eggs", "pasta"],  # Items user said they have
     modality="PICKUP",
@@ -1249,16 +1412,16 @@ add_recipe_to_cart_with_confirmation(
 
 ### Bulk Cart Operations
 
-For bulk adds, use the `preview_only` parameter with `add_to_cart`:
+For bulk adds, use the `preview_only` parameter with `cart(action='add')`:
 
 ```
 # Step 1: Preview
-add_to_cart(items=[...], preview_only=True)
+cart(action='add', items=[...], preview_only=True)
 
 # Show preview, get confirmation
 
 # Step 2: Execute
-add_to_cart(items=[...], preview_only=False)
+cart(action='add', items=[...], preview_only=False)
 ```
 
 ---
@@ -1266,10 +1429,10 @@ add_to_cart(items=[...], preview_only=False)
 ## Order Completion
 
 After shopping is complete:
-1. Review cart with `view_current_cart`
+1. Review cart with `cart(action='view')`
 2. Confirm all items meet quality standards
 3. User completes checkout on Kroger app/website
-4. Use `mark_order_placed` to record the order
+4. Use `cart(action='mark_placed')` to record the order
 5. This updates predictions for future shopping
 
 ---
@@ -1279,116 +1442,153 @@ After shopping is complete:
 ### Shopping & Cart
 | Tool | Use For |
 |------|---------|
-| `search_products` | Find ingredient(s) at Kroger (single or batch) |
-| `get_product_details` | Get details for product(s) by ID (single or batch) |
-| `get_shopping_context` | Check pantry/favorites before adding to cart |
-| `add_to_cart` | Add item(s) to cart (single or batch, use preview_only=True first) |
-| `view_current_cart` | See what's in cart |
-| `mark_order_placed` | Record completed order |
+| `products(action='search')` | Find ingredient(s) at Kroger (single or batch) |
+| `products(action='get')` | Get details for product(s) by ID (single or batch) |
+| `cart(action='get_context')` | Check pantry/favorites before adding to cart |
+| `cart(action='add')` | Add item(s) to cart (single or batch, use preview_only=True first) |
+| `cart(action='view')` | See what's in cart |
+| `cart(action='mark_placed')` | Record completed order |
 
 ### Predictions & Analytics
 | Tool | Use For |
 |------|---------|
-| `get_purchase_predictions` | What you'll need soon |
-| `get_shopping_suggestions` | Smart shopping list |
-| `get_item_statistics` | Product purchase patterns (single or batch) |
-| `categorize_item` | Change item category |
-| `get_seasonal_items` | Upcoming holiday items |
+| `predictions(action='get_predictions')` | What you'll need soon |
+| `predictions(action='get_suggestions')` | Smart shopping list |
+| `predictions(action='get_stats')` | Product purchase patterns (single or batch) |
+| `predictions(action='categorize')` | Change item category |
+| `predictions(action='get_seasonal')` | Upcoming holiday items |
 
 ### Recipe Management
 | Tool | Use For |
 |------|---------|
-| `save_recipe` | Save recipe with ingredients |
-| `get_recipes` | List saved recipes |
-| `search_recipes` | Find recipe by name/tag |
-| `preview_recipe_order` | Preview with skip options |
-| `add_recipe_to_cart_with_confirmation` | Order with 2-step confirmation workflow |
-| `link_ingredient_to_product` | Link ingredient(s) to Kroger product (single or batch) |
+| `recipes(action='save')` | Save recipe with ingredients |
+| `recipes(action='list')` | List saved recipes |
+| `recipes(action='search')` | Find recipe by name/tag |
+| `recipes(action='preview_order')` | Preview with skip options |
+| `recipes(action='add_to_cart')` | Order with 2-step confirmation workflow |
+| `recipes(action='link_ingredient')` | Link ingredient(s) to Kroger product (single or batch) |
 
 ### Pantry Tracking
 | Tool | Use For |
 |------|---------|
-| `get_pantry` | View all pantry items with levels |
-| `update_pantry_item` | Manually set level (0-100%) |
-| `restock_pantry_item` | Mark item(s) as restocked (single or batch) |
-| `get_low_inventory` | Get items running low |
-| `add_to_pantry` | Start tracking an item |
-| `remove_from_pantry` | Stop tracking an item |
+| `pantry(action='get')` | View all pantry items with levels |
+| `pantry(action='update')` | Manually set level (0-100%) |
+| `pantry(action='restock')` | Mark item(s) as restocked (single or batch) |
+| `pantry(action='get_low')` | Get items running low |
+| `pantry(action='add')` | Start tracking an item |
+| `pantry(action='remove')` | Stop tracking an item |
 
 ### Reporting & Export
 | Tool | Use For |
 |------|---------|
-| `get_analytics_report` | Generate spending/pattern/prediction reports |
-| `export_data` | Export all data as JSON backup |
-| `check_recipe_pantry` | Check if pantry has recipe ingredients |
-| `generate_recipe_shopping_list` | Optimized list for multiple recipes |
-| `get_cookable_recipes` | Find recipes makeable with current pantry |
+| `reporting(action='get_report')` | Generate spending/pattern/prediction reports |
+| `reporting(action='export')` | Export all data as JSON backup |
+| `recipes(action='check_pantry')` | Check if pantry has recipe ingredients |
+| `recipes(action='generate_shopping_list')` | Optimized list for multiple recipes |
+| `recipes(action='get_cookable')` | Find recipes makeable with current pantry |
 
 ### Favorite Lists
 | Tool | Use For |
 |------|---------|
-| `create_favorite_list` | Create named list with optional reorder schedule |
-| `get_favorite_lists` | View all lists with item counts and reorder status |
-| `add_to_favorite_list` | Add product(s) to a list (single or bulk) |
-| `remove_from_favorite_list` | Remove product from list |
-| `get_favorite_list_items` | View items with pantry levels |
-| `order_favorite_list` | Order list items (shows if overdue) |
-| `update_list_schedule` | Set/update reorder schedule (1-52 weeks) |
-| `suggest_favorites` | Get suggestions from purchase history |
+| `favorite_lists(action='create')` | Create named list with optional reorder schedule |
+| `favorite_lists(action='list')` | View all lists with item counts and reorder status |
+| `favorite_lists(action='add_item')` | Add product(s) to a list (single or bulk) |
+| `favorite_lists(action='remove_item')` | Remove product from list |
+| `favorite_lists(action='get_items')` | View items with pantry levels |
+| `favorite_lists(action='order')` | Order list items (shows if overdue) |
+| `favorite_lists(action='update_schedule')` | Set/update reorder schedule (1-52 weeks) |
+| `favorite_lists(action='suggest')` | Get suggestions from purchase history |
 
 ### Meal Planning
 | Tool | Use For |
 |------|---------|
-| `create_meal_plan` | Create weekly/monthly meal plan |
-| `get_meal_plans` | List all meal plans |
-| `get_meal_plan` | Get full plan details |
-| `update_meal_plan` | Update plan name/dates |
-| `delete_meal_plan` | Delete a meal plan |
-| `copy_meal_plan` | Copy plan to new dates |
-| `assign_meal` | Assign recipe(s) to day/slot (single or batch) |
-| `remove_meal` | Remove recipe from slot |
-| `swap_meals` | Swap two meal assignments |
-| `preview_meal_plan_shopping` | Preview shopping list for plan |
-| `add_meal_plan_to_cart` | Order plan ingredients (2-step confirmation) |
-| `get_week_view` | Calendar view of weekly meals |
-| `get_meal_plan_summary` | Plan statistics and readiness |
+| `meal_plans(action='create')` | Create weekly/monthly meal plan |
+| `meal_plans(action='list')` | List all meal plans |
+| `meal_plans(action='get')` | Get full plan details |
+| `meal_plans(action='update')` | Update plan name/dates |
+| `meal_plans(action='delete')` | Delete a meal plan |
+| `meal_plans(action='copy')` | Copy plan to new dates |
+| `meal_plans(action='assign_meal')` | Assign recipe(s) to day/slot (single or batch) |
+| `meal_plans(action='remove_meal')` | Remove recipe from slot |
+| `meal_plans(action='swap_meals')` | Swap two meal assignments |
+| `meal_plans(action='preview_shopping')` | Preview shopping list for plan |
+| `meal_plans(action='add_to_cart')` | Order plan ingredients (2-step confirmation) |
+| `meal_plans(action='get_week_view')` | Calendar view of weekly meals |
+| `meal_plans(action='get_summary')` | Plan statistics and readiness |
+
+### Shopping List
+| Tool | Use For |
+|------|---------|
+| `shopping_list(action='add_recipe')` | Add recipe to list (auto-scaled to household default) |
+| `shopping_list(action='get')` | View consolidated shopping list |
+| `shopping_list(action='remove')` | Remove item(s) or clear list |
+| `shopping_list(action='update_item')` | Update quantity or notes for an item |
+| `shopping_list(action='add_to_cart')` | Transfer list to cart (2-step confirmation) |
 
 ### Configuration
 | Tool | Use For |
 |------|---------|
-| `configure_predictions` | Tune prediction parameters |
-| `get_prediction_config` | View current settings |
-| `reset_prediction_config` | Reset to defaults |
+| `predictions(action='configure')` | Tune prediction parameters |
+| `predictions(action='get_config')` | View current settings |
+| `predictions(action='reset_config')` | Reset to defaults |
+| `utility(action='set_servings')` | Set household size (servings per meal) |
+| `utility(action='get_servings')` | Get current servings preference |
 
 ### Safety Filtering
 | Tool | Use For |
 |------|---------|
-| `check_product_safety` | Check single product for bad ingredients |
-| `check_products_safety` | Batch check up to 50 products |
-| `check_cart_safety` | Scan entire cart for safety concerns |
-| `get_bad_ingredients_list` | View 62+ flagged ingredients |
-| `configure_safety_settings` | Enable/disable filtering, set block mode |
-| `approve_product` | Add product to safe list |
-| `block_product` | Add product to blocked list |
-| `get_safe_products` | View safe-listed products |
-| `get_blocked_products` | View blocked products |
-| `toggle_ingredient_check` | Enable/disable specific ingredient checks |
+| `safety_check(action='check_product')` | Check single product for bad ingredients |
+| `safety_check(action='check_products')` | Batch check up to 50 products |
+| `safety_check(action='check_cart')` | Scan entire cart for safety concerns |
+| `safety_check(action='get_ingredients_list')` | View 62+ flagged ingredients |
+| `safety_check(action='configure_settings')` | Enable/disable filtering, set block mode |
+| `safety_products(action='approve')` | Add product to safe list |
+| `safety_products(action='block')` | Add product to blocked list |
+| `safety_products(action='get_safe')` | View safe-listed products |
+| `safety_products(action='get_blocked')` | View blocked products |
+| `safety_check(action='toggle_ingredient')` | Enable/disable specific ingredient checks |
 
 ### Deal Discovery & Price Tracking
 | Tool | Use For |
 |------|---------|
-| `find_deals` | Search for products on sale (by category or search term) |
-| `get_price_history` | View price trends and best time to buy |
-| `add_to_watchlist` | Track items for price drops |
-| `scan_watchlist_for_deals` | Check tracked items for current sales |
-| `get_latest_deal_scan` | View results from automated background scans |
+| `deals(action='find')` | Search for products on sale (by category or search term) |
+| `deals(action='get_price_history')` | View price trends and best time to buy |
+| `deals(action='add_to_watchlist')` | Track items for price drops |
+| `deals(action='scan_watchlist')` | Check tracked items for current sales |
+| `deals(action='get_latest_scan')` | View results from automated background scans |
 
 ### Whole Foods Catalog
 | Tool | Use For |
 |------|---------|
-| `add_to_whole_foods_catalog` | Add product to clean foods catalog |
-| `get_whole_foods_catalog` | View all whole foods |
-| `scan_for_whole_foods` | Find qualifying products by category |
+| `whole_foods(action='add')` | Add product to clean foods catalog |
+| `whole_foods(action='get_catalog')` | View all whole foods |
+| `whole_foods(action='scan')` | Find qualifying products by category |
+
+### Custom Ingredients
+| Tool | Use For |
+|------|---------|
+| `ingredients(action='add')` | Add custom ingredient(s) to flag |
+| `ingredients(action='edit')` | Modify custom ingredients |
+| `ingredients(action='remove')` | Remove custom ingredients |
+| `ingredients(action='list')` | View all custom ingredients |
+| `ingredients(action='override_system')` | Change default ingredient settings |
+| `ingredients(action='reset_system')` | Restore system defaults |
+| `ingredients(action='import')` | Import an ingredient list |
+| `ingredients(action='export')` | Export your custom ingredients |
+| `ingredients(action='preview_impact')` | See impact before adding |
+| `ingredients(action='get_info')` | Get detailed ingredient information |
+
+### Auth & Store Info
+| Tool | Use For |
+|------|---------|
+| `auth(action='start')` | Begin OAuth flow, get authorization URL |
+| `auth(action='complete')` | Complete auth with redirect URL |
+| `auth(action='test')` | Verify current token is valid |
+| `locations(action='search')` | Search for Kroger stores |
+| `locations(action='get_preferred')` | Get preferred store details |
+| `locations(action='set_preferred')` | Set preferred store |
+| `info(action='list_departments')` | Get all departments |
+| `info(action='list_chains')` | Get all Kroger-owned chains |
 
 ---
 
@@ -1403,7 +1603,7 @@ No action needed - this builds a price history database over time for trend anal
 
 **Search for deals by category:**
 ```
-find_deals(category='dairy', min_savings_percent=20)
+deals(action='find', category='dairy', min_savings_percent=20)
 ```
 
 Returns products on sale with at least 20% off. Categories:
@@ -1416,12 +1616,12 @@ Returns products on sale with at least 20% off. Categories:
 
 **Search for specific items on sale:**
 ```
-find_deals(search_term='milk', min_savings_percent=15)
+deals(action='find', search_term='milk', min_savings_percent=15)
 ```
 
 **Find best deals across all categories:**
 ```
-find_deals(sort_by='savings_percent', limit=50)
+deals(action='find', sort_by='savings_percent', limit=50)
 ```
 
 Results include:
@@ -1435,7 +1635,8 @@ Results include:
 
 **Add item to watchlist:**
 ```
-add_to_watchlist(
+deals(
+    action='add_to_watchlist',
     product_id='0001111041700',
     target_price=3.00,
     priority=3  # High priority = checked daily
@@ -1449,7 +1650,8 @@ Priority levels:
 
 **Check watchlist for deals:**
 ```
-scan_watchlist_for_deals(
+deals(
+    action='scan_watchlist',
     include_favorites=True,
     include_pantry=True,
     max_items=50
@@ -1457,7 +1659,7 @@ scan_watchlist_for_deals(
 ```
 
 This scans:
-1. Explicit watchlist (added via `add_to_watchlist`)
+1. Explicit watchlist (added via `deals(action='add_to_watchlist')`)
 2. Favorite list items
 3. Low pantry items (<=25% quantity)
 4. Recent purchases (last 30 days)
@@ -1465,7 +1667,7 @@ This scans:
 ### View Price History
 
 ```
-get_price_history(product_id='0001111041700', days=30)
+deals(action='get_price_history', product_id='0001111041700', days=30)
 ```
 
 Returns:
@@ -1498,7 +1700,7 @@ Set up twice-weekly automated scanning via macOS launchd:
 - **Schedule**: Monday & Thursday at 9:00 AM (before weekend shopping)
 - **Automatic**: Scans your watchlist for price drops
 - **Notifications**: macOS notifications when deals found
-- **View Results**: Use `get_latest_deal_scan` tool
+- **View Results**: Use `deals(action='get_latest_scan')` tool
 
 **Setup**: See [docs/BACKGROUND_SETUP.md](docs/BACKGROUND_SETUP.md) for full instructions.
 
@@ -1510,7 +1712,7 @@ bash scripts/setup-background-scanner.sh
 
 **View scan results:**
 ```
-get_latest_deal_scan(mark_as_viewed=False)
+deals(action='get_latest_scan', mark_as_viewed=False)
 ```
 
 Returns:
@@ -1544,17 +1746,17 @@ Example response:
 
 **Prioritize sale items in search:**
 ```
-search_products(query='milk', sort_by_deals=True)
+products(action='search', search_term='milk', sort_by_deals=True)
 ```
 
 **Get suggestions with sale priority:**
 ```
-get_shopping_suggestions(prioritize_sales=True)
+predictions(action='get_suggestions', prioritize_sales=True)
 ```
 
 **View cart savings:**
 ```
-view_current_cart()
+cart(action='view')
 ```
 
 Shows:
@@ -1587,7 +1789,8 @@ Uses the same evidence-based filter for:
 
 **Add single product with verification:**
 ```
-add_to_whole_foods_catalog(
+whole_foods(
+    action='add',
     product_id='0001111041700',
     verify_safety=True
 )
@@ -1617,7 +1820,8 @@ If product passes:
 ### View Catalog
 
 ```
-get_whole_foods_catalog(
+whole_foods(
+    action='get_catalog',
     include_unavailable=False,
     limit=100
 )
@@ -1633,7 +1837,8 @@ Returns list of all tracked whole foods with:
 
 **Scan by category:**
 ```
-scan_for_whole_foods(
+whole_foods(
+    action='scan',
     category='produce',
     auto_add=True,
     limit=20
@@ -1673,25 +1878,25 @@ Returns:
 **Cross-reference with deals:**
 ```
 # 1. Build whole foods catalog
-scan_for_whole_foods(category='dairy', auto_add=True)
+whole_foods(action='scan', category='dairy', auto_add=True)
 
 # 2. Find deals on whole foods
-find_deals(category='dairy', min_savings_percent=15)
+deals(action='find', category='dairy', min_savings_percent=15)
 
 # 3. Check if deal items are in catalog
-get_whole_foods_catalog()
+whole_foods(action='get_catalog')
 ```
 
 **Verify cart against catalog:**
 ```
 # 1. Add items to cart
-add_to_cart(items=[...])
+cart(action='add', items=[...])
 
 # 2. Check cart safety
-check_cart_safety()
+safety_check(action='check_cart')
 
 # 3. Verify items are in whole foods catalog
-get_whole_foods_catalog()
+whole_foods(action='get_catalog')
 ```
 
 ---

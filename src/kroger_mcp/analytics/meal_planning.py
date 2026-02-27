@@ -1031,10 +1031,28 @@ def generate_meal_plan_shopping_list(
             }
         recipe_info[recipe_id]['times_used'] += 1
 
-        for ing in recipe.get('ingredients', []):
+        # Use recursive collector for sub-recipe/side support
+        try:
+            from ..tools.recipe_tools import _collect_ingredients_recursive
+            collected = _collect_ingredients_recursive(recipe_id, scale)
+            collected_ings = collected.get("ingredients", [])
+        except Exception:
+            # Fallback to direct ingredients if import fails
+            collected_ings = [
+                {
+                    "name": ing.get("name", "Unknown"),
+                    "product_id": ing.get("product_id"),
+                    "scaled_quantity": (ing.get("quantity") or 1) * scale,
+                    "unit": ing.get("unit", ""),
+                    "from_recipe_name": recipe.get("name")
+                }
+                for ing in recipe.get("ingredients", [])
+            ]
+
+        for ing in collected_ings:
             ing_name = ing.get('name', 'Unknown')
             product_id = ing.get('product_id')
-            quantity = (ing.get('quantity') or 1) * scale
+            quantity = ing.get('scaled_quantity') or (ing.get('quantity') or 1) * scale
             unit = ing.get('unit', '')
 
             # Key for combining
@@ -1044,14 +1062,14 @@ def generate_meal_plan_shopping_list(
                 existing = all_ingredients[key]
                 if existing.get('unit') == unit:
                     existing['quantity'] += quantity
-                existing['from_recipes'].append(recipe.get('name'))
+                existing['from_recipes'].append(ing.get('from_recipe_name') or recipe.get('name'))
             else:
                 all_ingredients[key] = {
                     "name": ing_name,
                     "quantity": quantity,
                     "unit": unit,
                     "product_id": product_id,
-                    "from_recipes": [recipe.get('name')]
+                    "from_recipes": [ing.get('from_recipe_name') or recipe.get('name')]
                 }
 
     recipes_included = list(recipe_info.values())
@@ -1147,6 +1165,301 @@ def generate_meal_plan_shopping_list(
             "total_ingredients": len(all_ingredients)
         }
     }
+
+
+# ============== Pantry Consumption ==============
+
+
+def mark_meal_cooked(
+    plan_id: str,
+    meal_date: str,
+    meal_slot: str,
+    deduct_pantry: bool = True,
+) -> Dict[str, Any]:
+    """
+    Mark a meal entry as cooked and optionally deduct ingredients from pantry.
+
+    When deduct_pantry=True, each recipe ingredient is subtracted from the
+    pantry using the actual quantity and unit specified in the recipe,
+    scaled to the meal's servings.
+
+    Args:
+        plan_id: Plan identifier
+        meal_date: Date YYYY-MM-DD
+        meal_slot: 'breakfast', 'lunch', 'dinner', or 'snack'
+        deduct_pantry: Whether to deduct ingredient quantities from pantry
+
+    Returns:
+        Dict with cooking confirmation and pantry deduction summary
+    """
+    ensure_initialized()
+
+    conn = get_db_connection()
+    try:
+        # Get the meal entry
+        cursor = conn.execute("""
+            SELECT me.id, me.recipe_id, me.servings_override,
+                   me.cooked_at, me.pantry_deducted
+            FROM meal_entries me
+            WHERE me.plan_id = ? AND me.meal_date = ? AND me.meal_slot = ?
+        """, (plan_id, meal_date, meal_slot))
+        entry = cursor.fetchone()
+
+        if not entry:
+            return {
+                'success': False,
+                'error': f"No meal found at {meal_slot} on {meal_date}"
+            }
+
+        entry_id = entry['id']
+        recipe_id = entry['recipe_id']
+        already_cooked = bool(entry['cooked_at'])
+        already_deducted = bool(entry['pantry_deducted'])
+
+        recipe = get_recipe(recipe_id)
+        if not recipe:
+            return {
+                'success': False,
+                'error': f"Recipe '{recipe_id}' not found"
+            }
+
+        recipe_name = recipe.get('name', recipe_id)
+        base_servings = recipe.get('servings', 4)
+        servings = entry['servings_override'] or base_servings
+        scale = servings / base_servings if base_servings else 1.0
+
+        now = datetime.now().isoformat()
+
+        # Mark as cooked
+        conn.execute("""
+            UPDATE meal_entries
+            SET cooked_at = ?
+            WHERE id = ?
+        """, (now, entry_id))
+        conn.commit()
+
+        deduction_summary = []
+        deduction_errors = []
+        skipped_no_quantity = []
+
+        if deduct_pantry and not already_deducted:
+            from ..analytics.pantry import consume_from_pantry
+
+            # Collect ingredients (use recursive collector for sub-recipes)
+            try:
+                from ..tools.recipe_tools import _collect_ingredients_recursive
+                collected = _collect_ingredients_recursive(recipe_id, scale)
+                ingredients = collected.get('ingredients', [])
+            except Exception:
+                # Fallback to direct recipe ingredients
+                ingredients = [
+                    {
+                        'name': ing.get('name', ''),
+                        'scaled_quantity': (ing.get('quantity') or 1) * scale,
+                        'unit': ing.get('unit', ''),
+                        'product_id': ing.get('product_id'),
+                        'from_recipe_name': recipe_name,
+                    }
+                    for ing in recipe.get('ingredients', [])
+                ]
+
+            for ing in ingredients:
+                ing_name = ing.get('name', '')
+                product_id = ing.get('product_id')
+                qty = ing.get('scaled_quantity') or ing.get('quantity') or 0
+                unit = ing.get('unit', '')
+
+                if not product_id:
+                    # Can't deduct without a product ID
+                    skipped_no_quantity.append(ing_name)
+                    continue
+
+                if not qty or qty <= 0:
+                    skipped_no_quantity.append(ing_name)
+                    continue
+
+                try:
+                    result = consume_from_pantry(
+                        product_id=product_id,
+                        quantity=float(qty),
+                        unit=unit or 'each',
+                        source_type='meal_plan',
+                        source_id=str(entry_id),
+                        source_description=(
+                            f"{recipe_name} — {meal_slot} on {meal_date}"
+                        ),
+                    )
+                    if result.get('success'):
+                        deduction_summary.append({
+                            'ingredient': ing_name,
+                            'product_id': product_id,
+                            'consumed': qty,
+                            'unit': unit,
+                            'remaining_display': result.get('remaining_display'),
+                            'new_level': result.get('new_level'),
+                        })
+                    else:
+                        deduction_errors.append({
+                            'ingredient': ing_name,
+                            'error': result.get('error'),
+                        })
+                except Exception as e:
+                    deduction_errors.append({
+                        'ingredient': ing_name,
+                        'error': str(e),
+                    })
+
+            if deduction_summary or not deduction_errors:
+                # Mark pantry as deducted even if some items had no pantry entry
+                conn.execute("""
+                    UPDATE meal_entries SET pantry_deducted = 1 WHERE id = ?
+                """, (entry_id,))
+                conn.commit()
+
+        return {
+            'success': True,
+            'plan_id': plan_id,
+            'meal_date': meal_date,
+            'meal_slot': meal_slot,
+            'recipe_id': recipe_id,
+            'recipe_name': recipe_name,
+            'servings': servings,
+            'cooked_at': now,
+            'was_already_cooked': already_cooked,
+            'pantry_deducted': deduct_pantry and not already_deducted,
+            'already_deducted': already_deducted,
+            'deductions': deduction_summary,
+            'deduction_errors': deduction_errors,
+            'skipped_no_product_id': skipped_no_quantity,
+            'summary': {
+                'ingredients_deducted': len(deduction_summary),
+                'errors': len(deduction_errors),
+                'skipped': len(skipped_no_quantity),
+            },
+            'message': (
+                f"Marked '{recipe_name}' as cooked. "
+                f"Deducted {len(deduction_summary)} ingredient(s) from pantry."
+                if deduct_pantry and not already_deducted
+                else f"Marked '{recipe_name}' as cooked."
+            )
+        }
+    finally:
+        conn.close()
+
+
+def check_meal_pantry_availability(
+    plan_id: str,
+    meal_date: str,
+    meal_slot: str,
+) -> Dict[str, Any]:
+    """
+    Check if pantry has enough for a specific planned meal.
+
+    Returns per-ingredient availability with quantity comparisons
+    so users know exactly what they're short on before cooking.
+
+    Args:
+        plan_id: Plan identifier
+        meal_date: Date YYYY-MM-DD
+        meal_slot: Meal slot name
+
+    Returns:
+        Dict with per-ingredient availability and a ready_to_cook flag
+    """
+    ensure_initialized()
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute("""
+            SELECT recipe_id, servings_override
+            FROM meal_entries
+            WHERE plan_id = ? AND meal_date = ? AND meal_slot = ?
+        """, (plan_id, meal_date, meal_slot))
+        entry = cursor.fetchone()
+
+        if not entry:
+            return {
+                'success': False,
+                'error': f"No meal at {meal_slot} on {meal_date}"
+            }
+
+        recipe_id = entry['recipe_id']
+        recipe = get_recipe(recipe_id)
+        if not recipe:
+            return {'success': False, 'error': f"Recipe '{recipe_id}' not found"}
+
+        base_servings = recipe.get('servings', 4)
+        servings = entry['servings_override'] or base_servings
+        scale = servings / base_servings if base_servings else 1.0
+
+        # Collect ingredients
+        try:
+            from ..tools.recipe_tools import _collect_ingredients_recursive
+            collected = _collect_ingredients_recursive(recipe_id, scale)
+            ingredients = collected.get('ingredients', [])
+        except Exception:
+            ingredients = [
+                {
+                    'name': ing.get('name', ''),
+                    'scaled_quantity': (ing.get('quantity') or 1) * scale,
+                    'unit': ing.get('unit', ''),
+                    'product_id': ing.get('product_id'),
+                }
+                for ing in recipe.get('ingredients', [])
+            ]
+
+        from ..analytics.pantry import check_pantry_quantity
+
+        available = []
+        not_enough = []
+        unknown = []
+
+        for ing in ingredients:
+            ing_name = ing.get('name', '')
+            product_id = ing.get('product_id')
+            qty = ing.get('scaled_quantity') or ing.get('quantity') or 0
+            unit = ing.get('unit', 'each')
+
+            check = check_pantry_quantity(product_id, ing_name, float(qty), unit)
+            check['ingredient'] = ing_name
+            check['needed_display'] = f"{qty} {unit}".strip()
+
+            if not check['in_pantry']:
+                unknown.append(check)
+            elif check['has_enough']:
+                available.append(check)
+            else:
+                not_enough.append(check)
+
+        ready = len(not_enough) == 0 and len(unknown) == 0
+
+        return {
+            'success': True,
+            'plan_id': plan_id,
+            'meal_date': meal_date,
+            'meal_slot': meal_slot,
+            'recipe_id': recipe_id,
+            'recipe_name': recipe.get('name'),
+            'servings': servings,
+            'ready_to_cook': ready,
+            'available': available,
+            'not_enough': not_enough,
+            'unknown_pantry': unknown,
+            'summary': {
+                'total_ingredients': len(ingredients),
+                'available_count': len(available),
+                'insufficient_count': len(not_enough),
+                'unknown_count': len(unknown),
+            },
+            'message': (
+                "Ready to cook! All ingredients available."
+                if ready
+                else f"Missing or low on {len(not_enough)} ingredient(s). "
+                     f"{len(unknown)} not tracked in pantry."
+            )
+        }
+    finally:
+        conn.close()
 
 
 # ============== Utility Functions ==============
@@ -1294,3 +1607,348 @@ def get_meal_plan_summary(plan_id: str) -> Dict[str, Any]:
             "items_unknown": shopping.get('summary', {}).get('items_unknown', 0)
         }
     }
+
+
+# ─── Persistent Meal Plan Views ───────────────────────────────────────────────
+
+_SLOT_ORDER_SQL = (
+    "CASE me.meal_slot "
+    "WHEN 'breakfast' THEN 1 "
+    "WHEN 'lunch' THEN 2 "
+    "WHEN 'dinner' THEN 3 "
+    "ELSE 4 END"
+)
+
+
+def _entry_to_meal_dict(row: Any, plan_name: str) -> Dict[str, Any]:
+    """Convert a meal_entries row + plan_name into a meal dict with recipe name."""
+    recipe = _get_recipe_from_json(row["recipe_id"])
+    return {
+        "recipe_id": row["recipe_id"],
+        "recipe_name": recipe.get("name") if recipe else row["recipe_id"],
+        "plan_id": row["plan_id"],
+        "plan_name": plan_name,
+        "servings_override": row["servings_override"],
+        "notes": row["notes"],
+        "was_cooked": row["cooked_at"] is not None,
+        "cooked_at": row["cooked_at"],
+    }
+
+
+def _load_plan_names(conn: Any, plan_ids: set) -> Dict[str, str]:
+    """Fetch plan names for a set of plan_ids in one query."""
+    if not plan_ids:
+        return {}
+    placeholders = ",".join("?" * len(plan_ids))
+    rows = conn.execute(
+        f"SELECT id, name FROM meal_plans WHERE id IN ({placeholders})",
+        list(plan_ids),
+    ).fetchall()
+    return {r["id"]: r["name"] for r in rows}
+
+
+def get_today_meals() -> Dict[str, Any]:
+    """
+    Return today's planned meals grouped by slot.
+
+    Returns:
+        {success, date, meals: {breakfast, lunch, dinner, snack}, meal_count}
+        Each slot value is None (not planned) or a meal dict.
+    """
+    ensure_initialized()
+    conn = get_db_connection()
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        rows = conn.execute(
+            f"""
+            SELECT me.id, me.plan_id, me.meal_slot, me.meal_date,
+                   me.cooked_at, me.notes, me.servings_override, me.recipe_id
+            FROM meal_entries me
+            WHERE me.meal_date = ?
+            ORDER BY {_SLOT_ORDER_SQL}
+            """,
+            (today,),
+        ).fetchall()
+
+        plan_names = _load_plan_names(conn, {r["plan_id"] for r in rows})
+
+        meals: Dict[str, Any] = {
+            "breakfast": None,
+            "lunch": None,
+            "dinner": None,
+            "snack": None,
+        }
+        for row in rows:
+            slot = row["meal_slot"]
+            if slot in meals:
+                meals[slot] = _entry_to_meal_dict(row, plan_names.get(row["plan_id"], row["plan_id"]))
+
+        return {
+            "success": True,
+            "date": today,
+            "meals": meals,
+            "meal_count": sum(1 for v in meals.values() if v is not None),
+        }
+    finally:
+        conn.close()
+
+
+def get_next_meal() -> Dict[str, Any]:
+    """
+    Return the next upcoming (uncompleted) meal from now.
+
+    Returns:
+        {success, meal: {...}} or {success, message} when nothing is planned.
+    """
+    ensure_initialized()
+    conn = get_db_connection()
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        row = conn.execute(
+            f"""
+            SELECT me.id, me.plan_id, me.meal_slot, me.meal_date,
+                   me.cooked_at, me.notes, me.servings_override, me.recipe_id
+            FROM meal_entries me
+            WHERE me.meal_date >= ?
+            ORDER BY me.meal_date ASC, {_SLOT_ORDER_SQL}
+            LIMIT 1
+            """,
+            (today,),
+        ).fetchone()
+
+        if not row:
+            return {
+                "success": True,
+                "meal": None,
+                "message": "No upcoming meals planned.",
+            }
+
+        plan_names = _load_plan_names(conn, {row["plan_id"]})
+        meal = _entry_to_meal_dict(row, plan_names.get(row["plan_id"], row["plan_id"]))
+        meal["meal_date"] = row["meal_date"]
+        meal["meal_slot"] = row["meal_slot"]
+
+        return {
+            "success": True,
+            "meal": meal,
+        }
+    finally:
+        conn.close()
+
+
+def get_upcoming_meals(days: int = 7, from_date: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Return planned meals for the next N days starting from from_date (default today).
+
+    Args:
+        days: Number of days to look ahead (1–90)
+        from_date: Start date YYYY-MM-DD (default today)
+
+    Returns:
+        {success, from_date, to_date, days, day_list: [...], total_meals}
+        Each day_list entry: {date, day_of_week, meals: {slot: meal|None}, meal_count}
+    """
+    ensure_initialized()
+    days = max(1, min(90, days))
+    conn = get_db_connection()
+    try:
+        start = from_date or datetime.now().strftime("%Y-%m-%d")
+        start_dt = datetime.strptime(start, "%Y-%m-%d")
+        end_dt = start_dt + timedelta(days=days - 1)
+        end = end_dt.strftime("%Y-%m-%d")
+
+        rows = conn.execute(
+            f"""
+            SELECT me.meal_date, me.meal_slot, me.cooked_at,
+                   me.notes, me.servings_override, me.recipe_id, me.plan_id
+            FROM meal_entries me
+            WHERE me.meal_date BETWEEN ? AND ?
+            ORDER BY me.meal_date ASC, {_SLOT_ORDER_SQL}
+            """,
+            (start, end),
+        ).fetchall()
+
+        plan_names = _load_plan_names(conn, {r["plan_id"] for r in rows})
+
+        # Index by date → slot
+        by_date: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            d = row["meal_date"]
+            if d not in by_date:
+                by_date[d] = {}
+            by_date[d][row["meal_slot"]] = _entry_to_meal_dict(
+                row, plan_names.get(row["plan_id"], row["plan_id"])
+            )
+
+        # Build day list (every day in range, even empty ones)
+        day_list = []
+        total_meals = 0
+        for i in range(days):
+            d_dt = start_dt + timedelta(days=i)
+            d_str = d_dt.strftime("%Y-%m-%d")
+            day_meals = by_date.get(d_str, {})
+            slots = {
+                "breakfast": day_meals.get("breakfast"),
+                "lunch": day_meals.get("lunch"),
+                "dinner": day_meals.get("dinner"),
+                "snack": day_meals.get("snack"),
+            }
+            count = sum(1 for v in slots.values() if v is not None)
+            total_meals += count
+            day_list.append({
+                "date": d_str,
+                "day_of_week": d_dt.strftime("%A"),
+                "meals": slots,
+                "meal_count": count,
+            })
+
+        return {
+            "success": True,
+            "from_date": start,
+            "to_date": end,
+            "days": days,
+            "day_list": day_list,
+            "total_meals": total_meals,
+        }
+    finally:
+        conn.close()
+
+
+def get_meal_history(
+    days: int = 30,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Return past meal entries grouped by date (most recent first).
+
+    Args:
+        days: Look-back window in days (used when start_date not given)
+        start_date: Explicit start YYYY-MM-DD (overrides days)
+        end_date: Explicit end YYYY-MM-DD (defaults to yesterday)
+
+    Returns:
+        {success, from_date, to_date, day_list: [...], total_meals, cooked_count}
+        Each day_list entry: {date, day_of_week, meals: [...]}
+        Each meal entry includes was_cooked, cooked_at, cooked_label.
+    """
+    ensure_initialized()
+    conn = get_db_connection()
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        if end_date is None:
+            end_date = yesterday
+
+        if start_date is None:
+            cutoff_dt = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=days - 1)
+            start_date = cutoff_dt.strftime("%Y-%m-%d")
+
+        rows = conn.execute(
+            f"""
+            SELECT me.meal_date, me.meal_slot, me.cooked_at,
+                   me.notes, me.servings_override, me.recipe_id, me.plan_id
+            FROM meal_entries me
+            WHERE me.meal_date < ?
+              AND me.meal_date BETWEEN ? AND ?
+            ORDER BY me.meal_date DESC, {_SLOT_ORDER_SQL}
+            """,
+            (today, start_date, end_date),
+        ).fetchall()
+
+        plan_names = _load_plan_names(conn, {r["plan_id"] for r in rows})
+
+        # Group by date
+        by_date: Dict[str, list] = {}
+        for row in rows:
+            d = row["meal_date"]
+            if d not in by_date:
+                by_date[d] = []
+            entry = _entry_to_meal_dict(row, plan_names.get(row["plan_id"], row["plan_id"]))
+            entry["meal_slot"] = row["meal_slot"]
+            entry["cooked_label"] = "✓ Cooked" if row["cooked_at"] else "— Planned (not marked cooked)"
+            by_date[d].append(entry)
+
+        day_list = []
+        for d_str in sorted(by_date.keys(), reverse=True):
+            d_dt = datetime.strptime(d_str, "%Y-%m-%d")
+            day_list.append({
+                "date": d_str,
+                "day_of_week": d_dt.strftime("%A"),
+                "meals": by_date[d_str],
+            })
+
+        total_meals = sum(len(v) for v in by_date.values())
+        cooked_count = sum(
+            1 for meals in by_date.values() for m in meals if m["was_cooked"]
+        )
+
+        return {
+            "success": True,
+            "from_date": start_date,
+            "to_date": end_date,
+            "day_list": day_list,
+            "total_meals": total_meals,
+            "cooked_count": cooked_count,
+            "planned_only_count": total_meals - cooked_count,
+        }
+    finally:
+        conn.close()
+
+
+def cleanup_expired_plans(retention_days: int = 90) -> Dict[str, Any]:
+    """
+    Delete meal plans whose end_date is more than retention_days ago.
+
+    Cascade-deletes associated meal_entries (via FK).
+
+    Args:
+        retention_days: Plans are kept for this many days after end_date.
+
+    Returns:
+        {success, plans_removed, message}
+    """
+    ensure_initialized()
+    retention_days = max(1, retention_days)
+    conn = get_db_connection()
+    try:
+        # Identify plans to delete first (for informative response)
+        expired = conn.execute(
+            """
+            SELECT id, name, end_date
+            FROM meal_plans
+            WHERE date(end_date, '+' || ? || ' days') < date('now')
+            """,
+            (str(retention_days),),
+        ).fetchall()
+
+        if not expired:
+            return {
+                "success": True,
+                "plans_removed": 0,
+                "message": f"No expired plans found (retention: {retention_days} days).",
+            }
+
+        # Delete them (meal_entries cascade via FK)
+        conn.execute(
+            """
+            DELETE FROM meal_plans
+            WHERE date(end_date, '+' || ? || ' days') < date('now')
+            """,
+            (str(retention_days),),
+        )
+        conn.commit()
+
+        removed_names = [r["name"] for r in expired]
+        return {
+            "success": True,
+            "plans_removed": len(expired),
+            "removed_plan_names": removed_names,
+            "message": (
+                f"Removed {len(expired)} expired plan(s) "
+                f"(older than {retention_days} days past end_date)."
+            ),
+        }
+    finally:
+        conn.close()
