@@ -15,6 +15,63 @@ from .shared import (
 )
 
 
+def _format_product(product: Dict[str, Any], include_images: bool = True) -> Dict[str, Any]:
+    """Format a raw Kroger product into a consistent structure."""
+    formatted = {
+        "product_id": product.get("productId"),
+        "upc": product.get("upc"),
+        "description": product.get("description"),
+        "brand": product.get("brand"),
+        "categories": product.get("categories", []),
+        "country_origin": product.get("countryOrigin"),
+        "temperature": product.get("temperature", {})
+    }
+
+    if "items" in product and product["items"]:
+        item = product["items"][0]
+        formatted["item"] = {
+            "size": item.get("size"),
+            "sold_by": item.get("soldBy"),
+            "inventory": item.get("inventory", {}),
+            "fulfillment": item.get("fulfillment", {})
+        }
+
+        if "price" in item:
+            price = item["price"]
+            formatted["pricing"] = {
+                "regular_price": price.get("regular"),
+                "sale_price": price.get("promo"),
+                "regular_per_unit": price.get("regularPerUnitEstimate"),
+                "formatted_regular": format_currency(price.get("regular")),
+                "formatted_sale": format_currency(price.get("promo")),
+                "on_sale": price.get("promo") is not None and price.get("promo") < price.get("regular", float('inf'))
+            }
+
+    if "aisleLocations" in product:
+        formatted["aisle_locations"] = [
+            {
+                "description": aisle.get("description"),
+                "number": aisle.get("number"),
+                "side": aisle.get("side"),
+                "shelf_number": aisle.get("shelfNumber")
+            }
+            for aisle in product["aisleLocations"]
+        ]
+
+    if include_images and "images" in product and product["images"]:
+        formatted["images"] = [
+            {
+                "perspective": img.get("perspective"),
+                "url": img["sizes"][0].get("url") if img.get("sizes") else None,
+                "size": img["sizes"][0].get("size") if img.get("sizes") else None
+            }
+            for img in product["images"]
+            if img.get("sizes")
+        ]
+
+    return formatted
+
+
 def register_tools(mcp):
     """Register product-related tools with the FastMCP server"""
     
@@ -191,67 +248,8 @@ def register_tools(mcp):
                     "data": []
                 }
             
-            # Format product data
-            formatted_products = []
-            for product in products["data"]:
-                formatted_product = {
-                    "product_id": product.get("productId"),
-                    "upc": product.get("upc"),
-                    "description": product.get("description"),
-                    "brand": product.get("brand"),
-                    "categories": product.get("categories", []),
-                    "country_origin": product.get("countryOrigin"),
-                    "temperature": product.get("temperature", {})
-                }
-                
-                # Add item information (size, price, etc.)
-                if "items" in product and product["items"]:
-                    item = product["items"][0]
-                    formatted_product["item"] = {
-                        "size": item.get("size"),
-                        "sold_by": item.get("soldBy"),
-                        "inventory": item.get("inventory", {}),
-                        "fulfillment": item.get("fulfillment", {})
-                    }
-                    
-                    # Add pricing information
-                    if "price" in item:
-                        price = item["price"]
-                        formatted_product["pricing"] = {
-                            "regular_price": price.get("regular"),
-                            "sale_price": price.get("promo"),
-                            "regular_per_unit": price.get("regularPerUnitEstimate"),
-                            "formatted_regular": format_currency(price.get("regular")),
-                            "formatted_sale": format_currency(price.get("promo")),
-                            "on_sale": price.get("promo") is not None and price.get("promo") < price.get("regular", float('inf'))
-                        }
-                
-                # Add aisle information
-                if "aisleLocations" in product:
-                    formatted_product["aisle_locations"] = [
-                        {
-                            "description": aisle.get("description"),
-                            "number": aisle.get("number"),
-                            "side": aisle.get("side"),
-                            "shelf_number": aisle.get("shelfNumber")
-                        }
-                        for aisle in product["aisleLocations"]
-                    ]
-                
-                # Add image information
-                if "images" in product and product["images"]:
-                    formatted_product["images"] = [
-                        {
-                            "perspective": img.get("perspective"),
-                            "url": img["sizes"][0].get("url") if img.get("sizes") else None,
-                            "size": img["sizes"][0].get("size") if img.get("sizes") else None
-                        }
-                        for img in product["images"]
-                        if img.get("sizes")
-                    ]
-                
-                formatted_products.append(formatted_product)
-            
+            formatted_products = [_format_product(p) for p in products["data"]]
+
             if ctx:
                 await ctx.info(f"Found {len(formatted_products)} products")
             
@@ -276,6 +274,124 @@ def register_tools(mcp):
                 "error": str(e),
                 "data": []
             }
+
+    @mcp.tool()
+    async def bulk_search_products(
+        searches: List[Dict[str, Any]],
+        location_id: Optional[str] = None,
+        ctx: Context = None
+    ) -> Dict[str, Any]:
+        """
+        Search for multiple products in a single tool call to reduce round-trips.
+
+        Args:
+            searches: List of search queries (1-25). Each item should have:
+                      - term: The search term (e.g., "milk", "bread")
+                      - limit: Number of results per search (1-50, default: 10)
+                      - fulfillment: Optional fulfillment filter ("csp", "delivery", "pickup")
+                      - brand: Optional brand filter
+            location_id: Store location ID applied to all searches (uses preferred if not provided)
+
+        Returns:
+            Dictionary containing results for each search term
+        """
+        if not searches:
+            return {
+                "success": False,
+                "error": "At least one search request is required.",
+                "results": []
+            }
+
+        if len(searches) > 25:
+            return {
+                "success": False,
+                "error": "At most 25 search requests are allowed per call.",
+                "results": []
+            }
+
+        if not location_id:
+            location_id = get_preferred_location_id()
+            if not location_id:
+                return {
+                    "success": False,
+                    "error": "No location_id provided and no preferred location set. Use set_preferred_location first."
+                }
+
+        if ctx:
+            await ctx.info(f"Running {len(searches)} product searches at location {location_id}")
+
+        client = get_client_credentials_client()
+        results = []
+
+        for search in searches:
+            term = search.get("term", "").strip()
+            limit = search.get("limit", 10)
+            fulfillment = search.get("fulfillment")
+            brand = search.get("brand")
+
+            if not term:
+                results.append({
+                    "term": term,
+                    "success": False,
+                    "message": "Missing search term",
+                    "data": []
+                })
+                continue
+
+            try:
+                if ctx:
+                    await ctx.info(f"Searching for '{term}'")
+
+                products = client.product.search_products(
+                    term=term,
+                    location_id=location_id,
+                    limit=limit,
+                    fulfillment=fulfillment,
+                    brand=brand
+                )
+
+                if not products or "data" not in products or not products["data"]:
+                    results.append({
+                        "term": term,
+                        "success": False,
+                        "message": f"No products found matching '{term}'",
+                        "data": []
+                    })
+                    continue
+
+                formatted_products = [_format_product(p) for p in products["data"]]
+
+                results.append({
+                    "term": term,
+                    "success": True,
+                    "count": len(formatted_products),
+                    "data": formatted_products
+                })
+
+            except Exception as e:
+                if ctx:
+                    await ctx.error(f"Error searching for '{term}': {str(e)}")
+                results.append({
+                    "term": term,
+                    "success": False,
+                    "error": str(e),
+                    "data": []
+                })
+
+        total_found = sum(r.get("count", 0) for r in results)
+        successful = sum(1 for r in results if r.get("success"))
+
+        if ctx:
+            await ctx.info(f"Completed {len(searches)} searches: {successful} successful, {total_found} total products found")
+
+        return {
+            "success": successful > 0,
+            "location_id": location_id,
+            "searches_completed": len(results),
+            "searches_successful": successful,
+            "total_products_found": total_found,
+            "results": results
+        }
 
     @mcp.tool()
     async def get_product_details(
