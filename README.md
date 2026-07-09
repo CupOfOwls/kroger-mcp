@@ -2,8 +2,6 @@
 
 ![Logo](media/harper_logo.jpeg)
 
-<a href="https://mseep.ai/app/cupofowls-kroger-mcp"><img src="https://mseep.net/pr/cupofowls-kroger-mcp-badge.png" alt="MseeP.ai Security Assessment Badge" height="60"></a>
-
 A [FastMCP](https://github.com/jlowin/fastmcp) server that provides AI assistants like Claude with access to Kroger's grocery shopping functionality through the Model Context Protocol ([MCP](https://docs.anthropic.com/en/docs/agents-and-tools/mcp)). This server enables AI assistants to find stores, search products, manage shopping carts, and access Kroger's comprehensive grocery data via the [kroger-api](https://github.com/CupOfOwls/kroger-api) python library.
 
 ## 📺 Demo
@@ -302,3 +300,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 This is an unofficial MCP server for the Kroger Public API. It is not affiliated with, endorsed by, or sponsored by Kroger.
 
 For questions about the Kroger API, visit the [Kroger Developer Portal](https://developer.kroger.com/) or read the [kroger-api](https://github.com/CupOfOwls/kroger-api) package documentation.
+
+---
+
+<a href="https://mseep.ai/app/cupofowls-kroger-mcp"><img src="https://mseep.net/pr/cupofowls-kroger-mcp-badge.png" alt="MseeP.ai Security Assessment Badge" height="90"></a>
