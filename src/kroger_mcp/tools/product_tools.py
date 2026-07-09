@@ -4,7 +4,8 @@ Product search and management tools for Kroger MCP server
 
 from typing import Dict, List, Any, Optional, Literal
 from pydantic import Field
-from fastmcp import Context, Image
+from fastmcp import Context
+from fastmcp.utilities.types import Image
 import requests
 from io import BytesIO
 
