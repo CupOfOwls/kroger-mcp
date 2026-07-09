@@ -5,6 +5,17 @@ All notable changes to the `kroger-mcp` package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-07-08
+
+### Added
+
+- **Nutrition and allergen data exposed in product tools**: `search_products`, `bulk_search_products`, `get_product_details`, and `search_products_by_id` now return the `allergens`, `nutrition` (ingredient statement, serving size, nutrients), and `warnings` fields that the Kroger Products API 1.3.0 provides. Repeated warning lines are de-duplicated.
+- **`additional_info` passthrough**: any product fields the formatter does not model (e.g. `snapEligible`, `ratingsAndReviews`, `allergensDescription`, `productPageURI`) are passed through untouched under `additional_info`, so new Kroger API fields are never silently dropped.
+
+### Changed
+
+- `search_products_by_id` now uses the same product formatter as the other product tools, so its results include full item, aisle, and image data
+
 ## [0.3.0] - 2026-07-08
 
 ### Added

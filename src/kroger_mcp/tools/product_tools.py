@@ -16,6 +16,70 @@ from .shared import (
 )
 
 
+# Raw product keys the formatters transform into their own structure.
+# Anything outside this set is passed through untouched under
+# "additional_info" so new API fields are never silently dropped.
+_FORMATTED_KEYS = {
+    "productId", "upc", "description", "brand", "categories", "countryOrigin",
+    "temperature", "items", "aisleLocations", "images",
+    "allergens", "nutritionInformation", "warnings",
+}
+
+
+def _add_extended_attributes(formatted: Dict[str, Any], product: Dict[str, Any]) -> None:
+    """Add nutrition/allergen data (Products API 1.3.0+) and pass through
+    any remaining fields the formatter does not model."""
+    if product.get("allergens"):
+        formatted["allergens"] = [
+            {
+                "name": a.get("name"),
+                "level_of_containment": a.get("levelOfContainmentName")
+            }
+            for a in product["allergens"] if isinstance(a, dict)
+        ]
+
+    nutrition = product.get("nutritionInformation")
+    if isinstance(nutrition, list):
+        nutrition = nutrition[0] if nutrition else None
+    if isinstance(nutrition, dict):
+        serving = nutrition.get("servingSize") or {}
+        serving_unit = serving.get("unitOfMeasure") or {}
+        formatted["nutrition"] = {
+            "ingredient_statement": nutrition.get("ingredientStatement"),
+            "serving_size": (
+                f"{serving.get('quantity')} {serving_unit.get('abbreviation') or serving_unit.get('name') or ''}".strip()
+                if serving.get("quantity") is not None else None
+            ),
+            "servings_per_package": (nutrition.get("servingsPerPackage") or {}).get("value"),
+            "nutritional_rating": nutrition.get("nutritionalRating"),
+            "nutrients": [
+                {
+                    "name": n.get("displayName") or n.get("description"),
+                    "quantity": n.get("quantity"),
+                    "unit": (n.get("unitOfMeasure") or {}).get("abbreviation")
+                            or (n.get("unitOfMeasure") or {}).get("name"),
+                    "percent_daily_intake": n.get("percentDailyIntake")
+                }
+                for n in nutrition.get("nutrients", []) if isinstance(n, dict)
+            ]
+        }
+
+    if product.get("warnings"):
+        # The API often repeats the same warning text; keep unique lines in order
+        seen = set()
+        formatted["warnings"] = [
+            line for line in str(product["warnings"]).splitlines()
+            if line.strip() and not (line in seen or seen.add(line))
+        ]
+
+    additional = {
+        k: v for k, v in product.items()
+        if k not in _FORMATTED_KEYS and v not in (None, "", [], {})
+    }
+    if additional:
+        formatted["additional_info"] = additional
+
+
 def _format_product(product: Dict[str, Any], include_images: bool = True) -> Dict[str, Any]:
     """Format a raw Kroger product into a consistent structure."""
     formatted = {
@@ -69,6 +133,8 @@ def _format_product(product: Dict[str, Any], include_images: bool = True) -> Dic
             for img in product["images"]
             if img.get("sizes")
         ]
+
+    _add_extended_attributes(formatted, product)
 
     return formatted
 
@@ -501,7 +567,9 @@ def register_tools(mcp):
                     }
                     for img in product["images"]
                 ]
-            
+
+            _add_extended_attributes(result, product)
+
             return result
             
         except Exception as e:
@@ -555,28 +623,7 @@ def register_tools(mcp):
                     "data": []
                 }
             
-            # Format product data (similar to search_products but simpler)
-            formatted_products = []
-            for product in products["data"]:
-                formatted_product = {
-                    "product_id": product.get("productId"),
-                    "upc": product.get("upc"),
-                    "description": product.get("description"),
-                    "brand": product.get("brand"),
-                    "categories": product.get("categories", [])
-                }
-                
-                # Add basic pricing if available
-                if "items" in product and product["items"] and "price" in product["items"][0]:
-                    price = product["items"][0]["price"]
-                    formatted_product["pricing"] = {
-                        "regular_price": price.get("regular"),
-                        "sale_price": price.get("promo"),
-                        "formatted_regular": format_currency(price.get("regular")),
-                        "formatted_sale": format_currency(price.get("promo"))
-                    }
-                
-                formatted_products.append(formatted_product)
+            formatted_products = [_format_product(p) for p in products["data"]]
             
             if ctx:
                 await ctx.info(f"Found {len(formatted_products)} products with ID '{product_id}'")
