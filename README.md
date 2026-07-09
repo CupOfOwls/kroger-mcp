@@ -1,8 +1,8 @@
-[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/cupofowls-kroger-mcp-badge.png)](https://mseep.ai/app/cupofowls-kroger-mcp)
-
 # 🛒 Kroger MCP Server 🛍️ -- FastMCP for Kroger Shopping
 
 ![Logo](media/harper_logo.jpeg)
+
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/cupofowls-kroger-mcp-badge.png)](https://mseep.ai/app/cupofowls-kroger-mcp)
 
 A [FastMCP](https://github.com/jlowin/fastmcp) server that provides AI assistants like Claude with access to Kroger's grocery shopping functionality through the Model Context Protocol ([MCP](https://docs.anthropic.com/en/docs/agents-and-tools/mcp)). This server enables AI assistants to find stores, search products, manage shopping carts, and access Kroger's comprehensive grocery data via the [kroger-api](https://github.com/CupOfOwls/kroger-api) python library.
 
@@ -176,6 +176,7 @@ fastmcp dev server.py --with-editable .
 | Tool | Description | Auth Required |
 |------|-------------|---------------|
 | `search_products` | Search for products by name, brand, or other criteria | No |
+| `bulk_search_products` | Run up to 25 product searches in a single call | No |
 | `get_product_details` | Get detailed product information including pricing | No |
 | `search_products_by_id` | Find products by their specific product ID | No |
 | `get_product_images` | Get product images from specific perspective (front, back, etc.) | No |
@@ -231,6 +232,15 @@ Since the Kroger API doesn't provide cart viewing functionality, this server mai
 - **File**: `kroger_order_history.json`
 - **Contents**: Historical orders with placement timestamps
 - **Usage**: Move completed carts to history with `mark_order_placed`
+
+#### Where these files live
+
+State files (cart, order history, preferences) and OAuth tokens are stored in the first matching location:
+1. `$KROGER_TOKEN_DIR`, if you set that environment variable
+2. `$XDG_DATA_HOME/kroger-mcp/` (defaults to `~/.local/share/kroger-mcp/`) on macOS/Linux
+3. `%APPDATA%\kroger-mcp\` on Windows
+
+They are never written to the current working directory, which may be read-only or change between sessions under MCP hosts like Claude Desktop. Files from older versions that live in the working directory are migrated automatically on first use.
 
 ### 🚧 Kroger Public API Limitations
 - **View Only**: The `remove_from_cart` and `clear_current_cart` tools ONLY affect local tracking, not the actual Kroger cart

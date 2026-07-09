@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kroger-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "FastMCP server for Kroger API integration"
 license = {file = "LICENSE"}
 authors = [
@@ -27,8 +27,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp>=2.8.1",
-    "kroger-api>=0.2.0",
+    "fastmcp>=3.0,<4",
+    "kroger-api>=0.3.1",
     "requests",
     "pydantic>=2.0.0",
     "python-dotenv",

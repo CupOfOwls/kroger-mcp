@@ -5,6 +5,23 @@ All notable changes to the `kroger-mcp` package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-08
+
+### Added
+
+- `bulk_search_products` tool: run up to 25 product searches in a single call, with shared formatting logic extracted into a `_format_product` helper (thanks @ksletmoe, #20; closes #1)
+
+### Fixed
+
+- **Preferred location, cart, and order history now persist reliably** (fixes #15): all local state files are stored in the same per-user data directory as the OAuth tokens (`$KROGER_TOKEN_DIR`, else `$XDG_DATA_HOME/kroger-mcp/` on Unix / `%APPDATA%\kroger-mcp\` on Windows) instead of the current working directory, which is read-only and/or changes between sessions under MCP hosts like Claude Desktop. Legacy files found in the working directory are migrated automatically.
+- `Image` import updated for fastmcp >= 2.8.1 compatibility (thanks @dahifi, #17)
+- Warnings are printed to stderr instead of stdout, which could corrupt the stdio MCP transport
+
+### Changed
+
+- **Requires fastmcp 3.x** (tested against 3.4.4) and kroger-api >= 0.3.0
+- Added MseeP.ai security assessment badge to the README (thanks @lwsinclair, #6)
+
 ## [0.2.0] - 2025-05-28
 
 ### Added

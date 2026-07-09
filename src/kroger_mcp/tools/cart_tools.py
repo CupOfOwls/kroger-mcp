@@ -3,14 +3,15 @@ Cart tracking and management functionality
 """
 import json
 import os
+import sys
 from datetime import datetime
 from typing import Dict, Any, List
 
 from fastmcp import Context
-from .shared import get_authenticated_client
+from .shared import get_authenticated_client, resolve_data_file
 
 
-# Cart storage file
+# Cart storage file (resolved to the shared per-user data directory)
 CART_FILE = "kroger_cart.json"
 ORDER_HISTORY_FILE = "kroger_order_history.json"
 
@@ -18,8 +19,9 @@ ORDER_HISTORY_FILE = "kroger_order_history.json"
 def _load_cart_data() -> Dict[str, Any]:
     """Load cart data from file"""
     try:
-        if os.path.exists(CART_FILE):
-            with open(CART_FILE, 'r') as f:
+        cart_path = resolve_data_file(CART_FILE)
+        if os.path.exists(cart_path):
+            with open(cart_path, 'r') as f:
                 return json.load(f)
     except Exception:
         pass
@@ -29,17 +31,18 @@ def _load_cart_data() -> Dict[str, Any]:
 def _save_cart_data(cart_data: Dict[str, Any]) -> None:
     """Save cart data to file"""
     try:
-        with open(CART_FILE, 'w') as f:
+        with open(resolve_data_file(CART_FILE), 'w') as f:
             json.dump(cart_data, f, indent=2)
     except Exception as e:
-        print(f"Warning: Could not save cart data: {e}")
+        print(f"Warning: Could not save cart data: {e}", file=sys.stderr)
 
 
 def _load_order_history() -> List[Dict[str, Any]]:
     """Load order history from file"""
     try:
-        if os.path.exists(ORDER_HISTORY_FILE):
-            with open(ORDER_HISTORY_FILE, 'r') as f:
+        history_path = resolve_data_file(ORDER_HISTORY_FILE)
+        if os.path.exists(history_path):
+            with open(history_path, 'r') as f:
                 return json.load(f)
     except Exception:
         pass
@@ -49,10 +52,10 @@ def _load_order_history() -> List[Dict[str, Any]]:
 def _save_order_history(history: List[Dict[str, Any]]) -> None:
     """Save order history to file"""
     try:
-        with open(ORDER_HISTORY_FILE, 'w') as f:
+        with open(resolve_data_file(ORDER_HISTORY_FILE), 'w') as f:
             json.dump(history, f, indent=2)
     except Exception as e:
-        print(f"Warning: Could not save order history: {e}")
+        print(f"Warning: Could not save order history: {e}", file=sys.stderr)
 
 
 def _add_item_to_local_cart(product_id: str, quantity: int, modality: str, product_details: Dict[str, Any] = None) -> None:

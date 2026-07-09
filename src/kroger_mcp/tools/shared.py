@@ -3,13 +3,14 @@ Shared utilities and client management for Kroger MCP server
 """
 
 import os
+import sys
 import json
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 
 from kroger_api.kroger_api import KrogerAPI
 from kroger_api.utils.env import load_and_validate_env, get_zip_code
-from kroger_api.token_storage import load_token
+from kroger_api.token_storage import load_token, get_token_file_path
 
 # Load environment variables
 load_dotenv()
@@ -129,24 +130,45 @@ def invalidate_client_credentials_client():
     _client_credentials_client = None
 
 
+def resolve_data_file(filename: str) -> str:
+    """Resolve a state file to the shared per-user data directory.
+
+    State files live alongside the OAuth tokens (see
+    kroger_api.token_storage.get_token_file_path), NOT the current working
+    directory: MCP hosts like Claude Desktop launch the server with a CWD
+    that may be read-only and that varies between sessions, which made
+    state silently fail to persist (issue #15). Any legacy copy found in
+    the CWD is migrated once.
+    """
+    path = get_token_file_path(filename)
+    if not os.path.exists(path) and os.path.exists(filename):
+        try:
+            with open(filename, 'r') as src, open(path, 'w') as dst:
+                dst.write(src.read())
+        except Exception as e:
+            print(f"Warning: Could not migrate {filename} from CWD: {e}", file=sys.stderr)
+    return path
+
+
 def _load_preferences() -> dict:
     """Load preferences from file"""
     try:
-        if os.path.exists(PREFERENCES_FILE):
-            with open(PREFERENCES_FILE, 'r') as f:
+        prefs_path = resolve_data_file(PREFERENCES_FILE)
+        if os.path.exists(prefs_path):
+            with open(prefs_path, 'r') as f:
                 return json.load(f)
     except Exception as e:
-        print(f"Warning: Could not load preferences: {e}")
+        print(f"Warning: Could not load preferences: {e}", file=sys.stderr)
     return {"preferred_location_id": None}
 
 
 def _save_preferences(preferences: dict) -> None:
     """Save preferences to file"""
     try:
-        with open(PREFERENCES_FILE, 'w') as f:
+        with open(resolve_data_file(PREFERENCES_FILE), 'w') as f:
             json.dump(preferences, f, indent=2)
     except Exception as e:
-        print(f"Warning: Could not save preferences: {e}")
+        print(f"Warning: Could not save preferences: {e}", file=sys.stderr)
 
 
 def get_preferred_location_id() -> Optional[str]:
