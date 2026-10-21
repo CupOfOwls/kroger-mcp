@@ -141,6 +141,35 @@ async def test_bulk_search_stops_at_the_first_network_failure(mcp, requests_mock
     assert [r.get("searched", True) for r in error["results"]] == [True, False, False]
 
 
+async def test_bulk_search_checks_every_brand_before_searching(mcp, requests_mock, app_token):
+    products = requests_mock.get(f"{BASE}/v1/products", json={"data": []})
+    error, _ = await call_error(mcp, "bulk_search_products", {
+        "searches": [{"term": "milk"}, {"term": "bread", "brand": "  "}, {"term": "eggs"}], "location_id": STORE})
+    assert products.call_count == 0
+    assert error["type"] == "invalid_parameter"
+    assert error["param"] == "searches[1].brand"
+
+
+async def test_invalid_parameter_in_one_search_does_not_stop_the_others(mcp, requests_mock, app_token, monkeypatch):
+    from kroger_api.api.product import ProductAPI
+    from kroger_api.errors import InvalidParameterError
+
+    original = ProductAPI.search_products
+
+    def search_products(self, term=None, **kwargs):
+        if term == "bread":
+            raise InvalidParameterError("limit", 99, "must be from 1 to 50")
+        return original(self, term=term, **kwargs)
+
+    monkeypatch.setattr(ProductAPI, "search_products", search_products)
+    requests_mock.get(f"{BASE}/v1/products", json={"data": [{"productId": PRODUCT, "description": "Milk"}]})
+    result = await call_ok(mcp, "bulk_search_products", {
+        "searches": [{"term": "milk"}, {"term": "bread"}, {"term": "eggs"}], "location_id": STORE})
+    assert [r["success"] for r in result["results"]] == [True, False, True]
+    assert result["results"][1]["error"]["type"] == "invalid_parameter"
+    assert "stopped_early" not in result
+
+
 # --- formatting, entry points, and package metadata ---------------------------------
 
 

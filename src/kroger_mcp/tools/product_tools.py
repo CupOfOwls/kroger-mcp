@@ -12,6 +12,7 @@ from kroger_api import validation
 from kroger_api.errors import (
     BadRequestError,
     InternalServerError,
+    InvalidParameterError,
     InvalidResponseError,
     KrogerAPIError,
     NotFoundError,
@@ -34,7 +35,7 @@ IMAGE_TIMEOUT = 30
 # run. Any other error, such as a rate limit, rejected credentials, or a
 # network failure, would fail every later search too, so it stops the
 # remaining searches.
-_PER_SEARCH_ERRORS = (BadRequestError, NotFoundError, InternalServerError, InvalidResponseError)
+_PER_SEARCH_ERRORS = (InvalidParameterError, BadRequestError, NotFoundError, InternalServerError, InvalidResponseError)
 
 
 class ProductSearch(BaseModel):
@@ -405,9 +406,11 @@ def register_tools(mcp):
             remaining searches: they have success false and searched false. The
             call fails only if no search succeeded.
         """
-        # Check every term before sending any request
+        # Check every term and brand before sending any request
         for index, search in enumerate(searches):
             validation.search_term(search.term, param=f"searches[{index}].term")
+            if search.brand is not None:
+                validation.check_non_empty(f"searches[{index}].brand", search.brand)
         location_id = resolve_location_id(location_id)
 
         if ctx:
