@@ -2,15 +2,19 @@
 Shared utilities and client management for Kroger MCP server
 """
 
+import json
 import os
 import sys
-import json
-from typing import Optional, Dict, Any
+from typing import Any, Optional
+
 from dotenv import load_dotenv
 
+from kroger_api import KrogerClient
+from kroger_api.errors import BadRequestError
 from kroger_api.kroger_api import KrogerAPI
-from kroger_api.utils.env import load_and_validate_env, get_zip_code
 from kroger_api.token_storage import load_token, get_token_file_path
+
+from ..errors import KrogerToolError, SIGN_IN_STEP
 
 # Load environment variables
 load_dotenv()
@@ -22,104 +26,93 @@ _client_credentials_client: Optional[KrogerAPI] = None
 # JSON files for configuration storage
 PREFERENCES_FILE = "kroger_preferences.json"
 
+# Token file that kroger-api saves user (authorization-code) tokens to
+USER_TOKEN_FILE = ".kroger_token_user.json"
+
+# Scope of the token used for public data (products and locations)
+CLIENT_CREDENTIALS_SCOPE = "product.compact"
+
+DEFAULT_ZIP_CODE = "10001"
+
 
 def get_client_credentials_client() -> KrogerAPI:
-    """Get or create a client credentials authenticated client for public data"""
+    """Get the client for public data (products, locations, chains, departments)
+
+    The client holds an unexpired client-credentials token. kroger-api reuses
+    the saved token file while it is unexpired, and replaces a token the API
+    rejects.
+
+    Raises:
+        ConfigurationError: If KROGER_CLIENT_ID or KROGER_CLIENT_SECRET is missing
+        AuthenticationError: If Kroger rejects the client ID and secret
+    """
     global _client_credentials_client
-    
-    if _client_credentials_client is not None and _client_credentials_client.test_current_token():
-        return _client_credentials_client
-    
-    _client_credentials_client = None
-    
-    try:
-        load_and_validate_env(["KROGER_CLIENT_ID", "KROGER_CLIENT_SECRET"])
+
+    if _client_credentials_client is None:
         _client_credentials_client = KrogerAPI()
-        
-        # Try to load existing token first
-        token_file = ".kroger_token_client_product.compact.json"
-        token_info = load_token(token_file)
-        
-        if token_info:
-            # Test if the token is still valid
-            _client_credentials_client.client.token_info = token_info
-            if _client_credentials_client.test_current_token():
-                # Token is valid, use it
-                return _client_credentials_client
-        
-        # Token is invalid or not found, get a new one
-        token_info = _client_credentials_client.authorization.get_token_with_client_credentials("product.compact")
-        return _client_credentials_client
-    except Exception as e:
-        raise Exception(f"Failed to get client credentials: {str(e)}")
+
+    client = _client_credentials_client
+    token_info = client.client.token_info
+    if not token_info or KrogerClient.is_token_expired(token_info):
+        client.authorization.get_token_with_client_credentials(CLIENT_CREDENTIALS_SCOPE)
+    return client
 
 
 def get_authenticated_client() -> KrogerAPI:
-    """Get or create a user-authenticated client for cart operations
-    
-    This function attempts to load an existing token or prompts for authentication.
-    In an MCP context, the user needs to explicitly call start_authentication and
-    complete_authentication tools to authenticate.
-    
-    Returns:
-        KrogerAPI: Authenticated client
-        
+    """Get the client for the user's cart and profile
+
+    The client holds the user token saved by complete_authentication, refreshed
+    first if it has expired.
+
     Raises:
-        Exception: If no valid token is available and authentication is required
+        KrogerToolError: authentication_required, if there is no saved sign-in
+            or it has expired and cannot be renewed
+        ConfigurationError: If KROGER_CLIENT_ID or KROGER_CLIENT_SECRET is missing
+        KrogerAPIError: If renewing the sign-in fails for another reason, such
+            as a network error
     """
     global _authenticated_client
-    
-    if _authenticated_client is not None and _authenticated_client.test_current_token():
-        # Client exists and token is still valid
-        return _authenticated_client
-    
-    # Clear the reference if token is invalid
-    _authenticated_client = None
-    
-    try:
-        load_and_validate_env(["KROGER_CLIENT_ID", "KROGER_CLIENT_SECRET", "KROGER_REDIRECT_URI"])
-        
-        # Try to load existing user token first
-        token_file = ".kroger_token_user.json"
-        token_info = load_token(token_file)
-        
-        if token_info:
-            # Create a new client with the loaded token
-            _authenticated_client = KrogerAPI()
-            _authenticated_client.client.token_info = token_info
-            _authenticated_client.client.token_file = token_file
-            
-            if _authenticated_client.test_current_token():
-                # Token is valid, use it
-                return _authenticated_client
-            
-            # Token is invalid, try to refresh it
-            if "refresh_token" in token_info:
-                try:
-                    _authenticated_client.authorization.refresh_token(token_info["refresh_token"])
-                    # If refresh was successful, return the client
-                    if _authenticated_client.test_current_token():
-                        return _authenticated_client
-                except Exception:
-                    # Refresh failed, need to re-authenticate
-                    _authenticated_client = None
-        
-        # No valid token available, need user-initiated authentication
-        raise Exception(
-            "Authentication required. Please use the start_authentication tool to begin the OAuth flow, "
-            "then complete it with the complete_authentication tool."
-        )
-    except Exception as e:
-        if "Authentication required" in str(e):
-            # This is an expected error when authentication is needed
-            raise
-        else:
-            # Other unexpected errors
-            raise Exception(f"Authentication failed: {str(e)}")
+
+    client = _authenticated_client
+    if client is None:
+        token_info = load_token(USER_TOKEN_FILE)
+        if not token_info or not token_info.get("access_token"):
+            raise KrogerToolError(
+                "authentication_required",
+                "The user is not signed in to Kroger, and this tool needs their permission.",
+                next_step=SIGN_IN_STEP,
+            )
+        client = KrogerAPI()
+        client.client.token_info = token_info
+        client.client.token_file = USER_TOKEN_FILE
+
+    token_info = client.client.token_info
+    if KrogerClient.is_token_expired(token_info):
+        _authenticated_client = None
+        refresh_token = token_info.get("refresh_token")
+        if not refresh_token:
+            raise KrogerToolError(
+                "authentication_required",
+                "The user's Kroger sign-in has expired and has no refresh token to renew it with.",
+                next_step=SIGN_IN_STEP,
+            )
+        try:
+            client.authorization.refresh_token(refresh_token)
+        except BadRequestError as e:
+            raise KrogerToolError(
+                "authentication_required",
+                f"The user's Kroger sign-in has expired and could not be renewed: "
+                f"{e.kroger_message or e.message.splitlines()[0]}",
+                next_step=SIGN_IN_STEP,
+                details={"kroger_code": e.kroger_code, "correlation_id": e.correlation_id},
+            ) from e
+
+    _authenticated_client = client
+    return client
 
 
 def invalidate_authenticated_client():
-    """Invalidate the authenticated client to force re-authentication"""
+    """Forget the cached user client, so the next cart call reloads the saved token"""
     global _authenticated_client
     _authenticated_client = None
 
@@ -150,38 +143,93 @@ def resolve_data_file(filename: str) -> str:
     return path
 
 
-def _load_preferences() -> dict:
-    """Load preferences from file"""
+def load_state_file(filename: str, default: Any) -> Any:
+    """Read a JSON state file, or return default if the file does not exist
+
+    Raises:
+        KrogerToolError: local_state_error, if the file cannot be read, is not
+            valid JSON, or holds a different JSON type than default
+    """
+    path = resolve_data_file(filename)
+    if not os.path.exists(path):
+        return default
     try:
-        prefs_path = resolve_data_file(PREFERENCES_FILE)
-        if os.path.exists(prefs_path):
-            with open(prefs_path, 'r') as f:
-                return json.load(f)
-    except Exception as e:
-        print(f"Warning: Could not load preferences: {e}", file=sys.stderr)
-    return {"preferred_location_id": None}
+        with open(path, 'r') as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        raise _state_error(f"Could not read the local state file {path}: {e}", path) from e
+    if not isinstance(data, type(default)):
+        raise _state_error(
+            f"The local state file {path} holds a JSON {type(data).__name__}, not a JSON {type(default).__name__}.",
+            path,
+        )
+    return data
 
 
-def _save_preferences(preferences: dict) -> None:
-    """Save preferences to file"""
+def save_state_file(filename: str, data: Any) -> None:
+    """Write a JSON state file
+
+    The data goes to a temporary file that then replaces the old one, so a
+    failed write never leaves a half-written file behind.
+
+    Raises:
+        KrogerToolError: local_state_error, if the file cannot be written
+    """
+    path = resolve_data_file(filename)
+    temp_path = f"{path}.tmp"
     try:
-        with open(resolve_data_file(PREFERENCES_FILE), 'w') as f:
-            json.dump(preferences, f, indent=2)
-    except Exception as e:
-        print(f"Warning: Could not save preferences: {e}", file=sys.stderr)
+        with open(temp_path, 'w') as f:
+            json.dump(data, f, indent=2)
+        os.replace(temp_path, path)
+    except OSError as e:
+        raise KrogerToolError(
+            "local_state_error",
+            f"Could not write the local state file {path}: {e}",
+            next_step=(
+                "Make the directory writable, or set KROGER_TOKEN_DIR to a writable directory in this "
+                "MCP server's configuration and restart the server."
+            ),
+            details={"path": path},
+        ) from e
+
+
+def _state_error(message: str, path: str) -> KrogerToolError:
+    return KrogerToolError(
+        "local_state_error",
+        message,
+        next_step="Correct the file's JSON, or move the file aside to start again with empty state.",
+        details={"path": path},
+    )
 
 
 def get_preferred_location_id() -> Optional[str]:
     """Get the current preferred location ID from preferences file"""
-    preferences = _load_preferences()
-    return preferences.get("preferred_location_id")
+    return load_state_file(PREFERENCES_FILE, {}).get("preferred_location_id")
 
 
 def set_preferred_location_id(location_id: str) -> None:
     """Set the preferred location ID in preferences file"""
-    preferences = _load_preferences()
+    preferences = load_state_file(PREFERENCES_FILE, {})
     preferences["preferred_location_id"] = location_id
-    _save_preferences(preferences)
+    save_state_file(PREFERENCES_FILE, preferences)
+
+
+def resolve_location_id(location_id: Optional[str]) -> str:
+    """The given location ID, else the preferred location
+
+    Raises:
+        KrogerToolError: location_required, if neither is set
+    """
+    if location_id:
+        return location_id
+    preferred = get_preferred_location_id()
+    if preferred:
+        return preferred
+    raise KrogerToolError(
+        "location_required",
+        "No location_id was given and no preferred location is set.",
+        next_step="Pass location_id, or find a store with search_locations and save it with set_preferred_location.",
+    )
 
 
 def format_currency(value: Optional[float]) -> str:
@@ -191,6 +239,6 @@ def format_currency(value: Optional[float]) -> str:
     return f"${value:.2f}"
 
 
-def get_default_zip_code() -> str:
-    """Get the default zip code from environment or fallback"""
-    return get_zip_code(default="10001")
+def get_configured_zip_code() -> Optional[str]:
+    """The KROGER_USER_ZIP_CODE setting, or None if it is not set"""
+    return os.getenv("KROGER_USER_ZIP_CODE") or None

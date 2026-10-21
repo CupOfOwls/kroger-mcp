@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kroger-mcp"
-version = "0.3.1"
+version = "0.4.0"
 description = "FastMCP server for Kroger API integration"
 license = {file = "LICENSE"}
 authors = [
@@ -28,7 +28,7 @@ classifiers = [
 
 dependencies = [
     "fastmcp>=3.0,<4",
-    "kroger-api>=0.3.1",
+    "kroger-api>=0.4.0",
     "requests",
     "pydantic>=2.0.0",
     "python-dotenv",
@@ -38,6 +38,7 @@ dependencies = [
 dev = [
     "pytest",
     "pytest-asyncio",
+    "requests-mock",
     "ruff",
     "black",
 ]
@@ -51,6 +52,10 @@ Homepage = "https://github.com/CupOfOwls/kroger-mcp"
 Repository = "https://github.com/CupOfOwls/kroger-mcp"
 Issues = "https://github.com/CupOfOwls/kroger-mcp/issues"
 Kroger_Documentation = "https://developer.kroger.com/documentation/public/"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/kroger_mcp"]

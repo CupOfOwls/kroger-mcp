@@ -207,9 +207,9 @@ fastmcp dev server.py --with-editable .
 | Tool | Description | Auth Required |
 |------|-------------|---------------|
 | `get_user_profile` | Get authenticated user's profile information | Yes |
-| `test_authentication` | Test if authentication token is valid | Yes |
-| `get_authentication_info` | Get detailed authentication status | Yes |
-| `force_reauthenticate` | Clear tokens and force re-authentication | No |
+| `test_authentication` | Test if the saved sign-in is valid, refreshing it if it has expired | No |
+| `get_authentication_info` | Get detailed authentication status | No |
+| `force_reauthenticate` | Delete the saved sign-in, so the user can sign in again | No |
 
 #### Utility Tools
 
@@ -239,6 +239,26 @@ State files (cart, order history, preferences) and OAuth tokens are stored in th
 3. `%APPDATA%\kroger-mcp\` on Windows
 
 They are never written to the current working directory, which may be read-only or change between sessions under MCP hosts like Claude Desktop. Files from older versions that live in the working directory are migrated automatically on first use.
+
+### ⚠️ Error Handling
+
+A tool that fails returns an MCP error result (`isError: true`), so the assistant can see what went wrong and correct its next call:
+
+- **Text content**: what went wrong, followed by `Next step:` and what to do about it, often naming the tool to call.
+- **Structured content**: an `error` object with a stable `type`, the `message`, the `next_step`, the `tool`, and every detail the [kroger-api](https://github.com/CupOfOwls/kroger-api) package has about a Kroger API error: `status_code`, Kroger's `kroger_code` and `kroger_message`, the request `method` and `url`, the `correlation_id`, a `hint`, and the `response_body`.
+
+| `type` | When |
+|--------|------|
+| `invalid_arguments` | An argument breaks the tool's input schema (wrong pattern, out of range, unknown name). `errors` lists each one. No request is sent. |
+| `invalid_parameter` | kroger-api rejected a value the schema cannot check, such as a search term of more than 8 words. No request is sent. |
+| `authentication_required` | The user is not signed in, or the sign-in expired and could not be renewed. |
+| `location_required` | A product tool got no `location_id` and no preferred location is set. |
+| `bad_request`, `authentication_error`, `permission_denied`, `not_found`, `rate_limited`, `server_error` | The Kroger API answered 400, 401, 403, 404, 429, or 5xx. |
+| `connection_error`, `timeout` | The Kroger API could not be reached, or did not answer within 30 seconds. |
+| `configuration_error` | A setting such as `KROGER_CLIENT_ID` is missing or invalid. Fix the server configuration and restart it. |
+| `local_state_error` | A cart, order history, or preferences file could not be read or written. |
+
+A search that finds nothing is not an error: it returns `count: 0` and a message. The full list of error types is in the [MCP tools reference](https://cupofowls.github.io/kroger-api/reference/mcp-tools#error-results).
 
 ### 🚧 Kroger Public API Limitations
 - **View Only**: The `remove_from_cart` and `clear_current_cart` tools ONLY affect local tracking, not the actual Kroger cart

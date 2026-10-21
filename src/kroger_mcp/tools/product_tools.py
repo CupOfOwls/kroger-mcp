@@ -2,18 +2,48 @@
 Product search and management tools for Kroger MCP server
 """
 
-from typing import Dict, List, Any, Optional, Literal
-from pydantic import Field
+from typing import Annotated, Any, Dict, List, Optional
+from pydantic import BaseModel, ConfigDict, Field
 from fastmcp import Context
 from fastmcp.utilities.types import Image
 import requests
-from io import BytesIO
 
+from kroger_api import validation
+from kroger_api.errors import (
+    APIConnectionError,
+    BadRequestError,
+    InternalServerError,
+    InvalidResponseError,
+    KrogerAPIError,
+    NotFoundError,
+)
+
+from ..errors import KrogerToolError, translate_errors
+from .params import Brand, Fulfillment, OptionalLocationId, ProductId, ProductLimit, SearchTerm
 from .shared import (
     get_client_credentials_client, 
     get_preferred_location_id,
+    resolve_location_id,
     format_currency
 )
+
+# Seconds to wait for a product image download
+IMAGE_TIMEOUT = 30
+
+# Errors that concern one search of a bulk search. Others, such as a rate
+# limit or rejected credentials, would fail every search, so they end the call.
+_PER_SEARCH_ERRORS = (BadRequestError, NotFoundError, InternalServerError, InvalidResponseError, APIConnectionError)
+
+
+class ProductSearch(BaseModel):
+    """One search of a bulk_search_products call"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    term: SearchTerm
+    limit: ProductLimit = 10
+    fulfillment: Fulfillment = None
+    brand: Brand = None
 
 
 # Raw product keys the formatters transform into their own structure.
@@ -139,14 +169,48 @@ def _format_product(product: Dict[str, Any], include_images: bool = True) -> Dic
     return formatted
 
 
+def _api_warnings(response: Optional[Dict[str, Any]]) -> Optional[List[str]]:
+    """Warnings the Products API puts in meta.warnings, such as product IDs it did not find"""
+    meta = (response or {}).get("meta") or {}
+    return meta.get("warnings") or None
+
+
+def _check_location_exists(client, location_id: str) -> None:
+    """Explain an empty product result that comes from an unknown store
+
+    The Products API answers a search at a locationId that does not exist
+    with an empty result instead of an error.
+
+    Raises:
+        KrogerToolError: not_found, if no store has this location ID
+    """
+    try:
+        exists = client.location.location_exists(location_id)
+    except KrogerAPIError:
+        # The check only explains an empty result, which stands without it
+        return
+    if not exists:
+        raise KrogerToolError(
+            "not_found",
+            f"No store has locationId {location_id}. The Kroger Products API returns an empty result, "
+            f"not an error, for a location that does not exist.",
+            next_step=(
+                "Find a valid location_id with search_locations. If this is the preferred location, "
+                "replace it with set_preferred_location."
+            ),
+            details={"location_id": location_id},
+        )
+
+
 def register_tools(mcp):
     """Register product-related tools with the FastMCP server"""
     
     @mcp.tool()
+    @translate_errors
     async def get_product_images(
-        product_id: str,
-        perspective: str = "front",
-        location_id: Optional[str] = None,
+        product_id: ProductId,
+        perspective: Annotated[str, Field(min_length=1)] = "front",
+        location_id: OptionalLocationId = None,
         ctx: Context = None
     ) -> Image:
         """
@@ -157,195 +221,154 @@ def register_tools(mcp):
         Args:
             product_id: The unique product identifier
             perspective: The image perspective to retrieve (default: "front")
-            location_id: Store location ID (uses preferred if not provided)
+            location_id: Store location ID (uses preferred if not provided; images are the same at every store)
         
         Returns:
             The product image from the requested perspective
         """
-        # Use preferred location if none provided
-        if not location_id:
-            location_id = get_preferred_location_id()
-            if not location_id:
-                return {
-                    "success": False,
-                    "error": "No location_id provided and no preferred location set. Use set_preferred_location first."
-                }
+        # Images do not depend on the store, so a location is optional
+        location_id = location_id or get_preferred_location_id()
         
         if ctx:
             await ctx.info(f"Fetching images for product {product_id} at location {location_id}")
         
         client = get_client_credentials_client()
         
-        try:
-            # Get product details to extract image URLs
-            product_details = client.product.get_product(
-                product_id=product_id,
-                location_id=location_id
+        # Get product details to extract image URLs (an unknown product raises NotFoundError)
+        product_details = client.product.get_product(
+            product_id=product_id,
+            location_id=location_id
+        )
+        product = (product_details or {}).get("data")
+        if not isinstance(product, dict):
+            raise KrogerToolError(
+                "unexpected_response",
+                f"The Kroger Products API answered without data for product {product_id}.",
+                details={"response_body": product_details},
             )
-            
-            if not product_details or "data" not in product_details:
-                return {
-                    "success": False,
-                    "message": f"Product {product_id} not found"
-                }
-            
-            product = product_details["data"]
-            
-            # Check if images are available
-            if "images" not in product or not product["images"]:
-                return {
-                    "success": False,
-                    "message": f"No images available for product {product_id}"
-                }
-            
-            # Find the requested perspective image
-            perspective_image = None
-            available_perspectives = []
-            
-            for img_data in product["images"]:
-                img_perspective = img_data.get("perspective", "unknown")
-                available_perspectives.append(img_perspective)
-                
-                # Skip if not the requested perspective
-                if img_perspective != perspective:
-                    continue
-                    
-                if not img_data.get("sizes"):
-                    continue
-                
-                # Find the best image size (prefer large, fallback to xlarge or other available)
-                img_url = None
-                size_preference = ["large", "xlarge", "medium", "small", "thumbnail"]
-                
-                # Create a map of available sizes for quick lookup
-                available_sizes = {size.get("size"): size.get("url") for size in img_data.get("sizes", []) if size.get("size") and size.get("url")}
-                
-                # Select best size based on preference order
-                for size in size_preference:
-                    if size in available_sizes:
-                        img_url = available_sizes[size]
-                        break
-                
-                if img_url:
-                    try:
-                        if ctx:
-                            await ctx.info(f"Downloading {perspective} image from {img_url}")
-                        
-                        # Download image
-                        response = requests.get(img_url)
-                        response.raise_for_status()
-                        
-                        # Create Image object
-                        perspective_image = Image(
-                            data=response.content,
-                            format="jpeg"  # Kroger images are typically JPEG
-                        )
-                        break
-                    except Exception as e:
-                        if ctx:
-                            await ctx.warning(f"Failed to download {perspective} image: {str(e)}")
-            
-            # If the requested perspective wasn't found
-            if not perspective_image:
-                available_str = ", ".join(available_perspectives) if available_perspectives else "none"
-                return {
-                    "success": False,
-                    "message": f"No image found for perspective '{perspective}'. Available perspectives: {available_str}"
-                }
-            
-            return perspective_image
         
-        except Exception as e:
-            if ctx:
-                await ctx.error(f"Error getting product images: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
+        images = product.get("images") or []
+        if not images:
+            raise KrogerToolError(
+                "no_images",
+                f"Product {product_id} has no images.",
+                details={"product_id": product_id},
+            )
+        
+        available_perspectives = [img.get("perspective", "unknown") for img in images]
+        img_data = next((img for img in images if img.get("perspective") == perspective and img.get("sizes")), None)
+        if img_data is None:
+            raise KrogerToolError(
+                "invalid_parameter",
+                f"Product {product_id} has no '{perspective}' image. Available perspectives: "
+                f"{', '.join(available_perspectives)}",
+                next_step="Call get_product_images again with one of the available perspectives.",
+                details={"param": "perspective", "value": perspective, "available_perspectives": available_perspectives},
+            )
+        
+        # Find the best image size (prefer large, fallback to xlarge or other available)
+        size_preference = ["large", "xlarge", "medium", "small", "thumbnail"]
+        available_sizes = {size.get("size"): size.get("url") for size in img_data["sizes"] if size.get("size") and size.get("url")}
+        img_url = next((available_sizes[size] for size in size_preference if size in available_sizes), None)
+        if img_url is None:
+            # Sizes outside the preference list are still usable
+            img_url = next(iter(available_sizes.values()), None)
+        if img_url is None:
+            raise KrogerToolError(
+                "no_images",
+                f"The '{perspective}' image of product {product_id} has no download URL.",
+                details={"product_id": product_id, "perspective": perspective},
+            )
+        
+        if ctx:
+            await ctx.info(f"Downloading {perspective} image from {img_url}")
+        
+        try:
+            response = requests.get(img_url, timeout=IMAGE_TIMEOUT)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            status_code = e.response.status_code if e.response is not None else None
+            raise KrogerToolError(
+                "image_download_failed",
+                f"Could not download the {perspective} image of product {product_id} from {img_url}: {e}",
+                next_step="Retry once. If it fails again, give the user the image URL instead.",
+                details={"url": img_url, "status_code": status_code},
+            ) from e
+        
+        # Kroger images are typically JPEG
+        return Image(data=response.content, format="jpeg")
     
     @mcp.tool()
+    @translate_errors
     async def search_products(
-        search_term: str,
-        location_id: Optional[str] = None,
-        limit: int = Field(default=10, ge=1, le=50, description="Number of results to return (1-50)"),
-        fulfillment: Optional[Literal["csp", "delivery", "pickup"]] = None,
-        brand: Optional[str] = None,
+        search_term: SearchTerm,
+        location_id: OptionalLocationId = None,
+        limit: ProductLimit = 10,
+        fulfillment: Fulfillment = None,
+        brand: Brand = None,
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
         Search for products at a Kroger store.
         
         Args:
-            search_term: Product search term (e.g., "milk", "bread", "organic apples")
+            search_term: Product search term (e.g., "milk", "bread", "organic apples"); 3+ characters, at most 8 words
             location_id: Store location ID (uses preferred location if not provided)
             limit: Number of results to return (1-50)
-            fulfillment: Filter by fulfillment method (csp=curbside pickup, delivery, pickup)
-            brand: Filter by brand name
+            fulfillment: Filter by fulfillment method: ais (available in store), csp (curbside pickup),
+                dth (delivery to home), sth (ship to home)
+            brand: Filter by brand name (case-sensitive)
         
         Returns:
             Dictionary containing product search results
         """
-        # Use preferred location if none provided
-        if not location_id:
-            location_id = get_preferred_location_id()
-            if not location_id:
-                return {
-                    "success": False,
-                    "error": "No location_id provided and no preferred location set. Use set_preferred_location first."
-                }
+        validation.search_term(search_term, param="search_term")
+        location_id = resolve_location_id(location_id)
         
         if ctx:
             await ctx.info(f"Searching for '{search_term}' at location {location_id}")
         
         client = get_client_credentials_client()
         
-        try:
-            products = client.product.search_products(
-                term=search_term,
-                location_id=location_id,
-                limit=limit,
-                fulfillment=fulfillment,
-                brand=brand
-            )
-            
-            if not products or "data" not in products or not products["data"]:
-                return {
-                    "success": False,
-                    "message": f"No products found matching '{search_term}'",
-                    "data": []
-                }
-            
-            formatted_products = [_format_product(p) for p in products["data"]]
+        products = client.product.search_products(
+            term=search_term,
+            location_id=location_id,
+            limit=limit,
+            fulfillment=fulfillment,
+            brand=brand
+        )
+        
+        formatted_products = [_format_product(p) for p in (products or {}).get("data") or []]
+        if not formatted_products:
+            _check_location_exists(client, location_id)
 
-            if ctx:
-                await ctx.info(f"Found {len(formatted_products)} products")
-            
-            return {
-                "success": True,
-                "search_params": {
-                    "search_term": search_term,
-                    "location_id": location_id,
-                    "limit": limit,
-                    "fulfillment": fulfillment,
-                    "brand": brand
-                },
-                "count": len(formatted_products),
-                "data": formatted_products
-            }
-            
-        except Exception as e:
-            if ctx:
-                await ctx.error(f"Error searching products: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-                "data": []
-            }
+        if ctx:
+            await ctx.info(f"Found {len(formatted_products)} products")
+        
+        result = {
+            "success": True,
+            "search_params": {
+                "search_term": search_term,
+                "location_id": location_id,
+                "limit": limit,
+                "fulfillment": fulfillment,
+                "brand": brand
+            },
+            "count": len(formatted_products),
+            "data": formatted_products
+        }
+        if not formatted_products:
+            result["message"] = f"No products found matching '{search_term}' at location {location_id}"
+        warnings = _api_warnings(products)
+        if warnings:
+            result["api_warnings"] = warnings
+        return result
 
     @mcp.tool()
+    @translate_errors
     async def bulk_search_products(
-        searches: List[Dict[str, Any]],
-        location_id: Optional[str] = None,
+        searches: Annotated[List[ProductSearch], Field(min_length=1, max_length=25)],
+        location_id: OptionalLocationId = None,
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
@@ -353,36 +376,21 @@ def register_tools(mcp):
 
         Args:
             searches: List of search queries (1-25). Each item should have:
-                      - term: The search term (e.g., "milk", "bread")
+                      - term: The search term (e.g., "milk", "bread"); 3+ characters, at most 8 words
                       - limit: Number of results per search (1-50, default: 10)
-                      - fulfillment: Optional fulfillment filter ("csp", "delivery", "pickup")
-                      - brand: Optional brand filter
+                      - fulfillment: Optional fulfillment filter ("ais", "csp", "dth", "sth")
+                      - brand: Optional brand filter (case-sensitive)
             location_id: Store location ID applied to all searches (uses preferred if not provided)
 
         Returns:
-            Dictionary containing results for each search term
+            Dictionary containing results for each search term. A search that fails
+            has success false and an error object; the call fails only if every
+            search fails.
         """
-        if not searches:
-            return {
-                "success": False,
-                "error": "At least one search request is required.",
-                "results": []
-            }
-
-        if len(searches) > 25:
-            return {
-                "success": False,
-                "error": "At most 25 search requests are allowed per call.",
-                "results": []
-            }
-
-        if not location_id:
-            location_id = get_preferred_location_id()
-            if not location_id:
-                return {
-                    "success": False,
-                    "error": "No location_id provided and no preferred location set. Use set_preferred_location first."
-                }
+        # Check every term before sending any request
+        for index, search in enumerate(searches):
+            validation.search_term(search.term, param=f"searches[{index}].term")
+        location_id = resolve_location_id(location_id)
 
         if ctx:
             await ctx.info(f"Running {len(searches)} product searches at location {location_id}")
@@ -391,68 +399,61 @@ def register_tools(mcp):
         results = []
 
         for search in searches:
-            term = search.get("term", "").strip()
-            limit = search.get("limit", 10)
-            fulfillment = search.get("fulfillment")
-            brand = search.get("brand")
+            if ctx:
+                await ctx.info(f"Searching for '{search.term}'")
 
-            if not term:
+            try:
+                products = client.product.search_products(
+                    term=search.term,
+                    location_id=location_id,
+                    limit=search.limit,
+                    fulfillment=search.fulfillment,
+                    brand=search.brand
+                )
+            except _PER_SEARCH_ERRORS as e:
+                if ctx:
+                    await ctx.warning(f"Error searching for '{search.term}': {e.message.splitlines()[0]}")
                 results.append({
-                    "term": term,
+                    "term": search.term,
                     "success": False,
-                    "message": "Missing search term",
+                    "error": KrogerToolError.from_api_error(e).to_dict(),
                     "data": []
                 })
                 continue
 
-            try:
-                if ctx:
-                    await ctx.info(f"Searching for '{term}'")
-
-                products = client.product.search_products(
-                    term=term,
-                    location_id=location_id,
-                    limit=limit,
-                    fulfillment=fulfillment,
-                    brand=brand
-                )
-
-                if not products or "data" not in products or not products["data"]:
-                    results.append({
-                        "term": term,
-                        "success": False,
-                        "message": f"No products found matching '{term}'",
-                        "data": []
-                    })
-                    continue
-
-                formatted_products = [_format_product(p) for p in products["data"]]
-
-                results.append({
-                    "term": term,
-                    "success": True,
-                    "count": len(formatted_products),
-                    "data": formatted_products
-                })
-
-            except Exception as e:
-                if ctx:
-                    await ctx.error(f"Error searching for '{term}': {str(e)}")
-                results.append({
-                    "term": term,
-                    "success": False,
-                    "error": str(e),
-                    "data": []
-                })
+            formatted_products = [_format_product(p) for p in (products or {}).get("data") or []]
+            result = {
+                "term": search.term,
+                "success": True,
+                "count": len(formatted_products),
+                "data": formatted_products
+            }
+            if not formatted_products:
+                result["message"] = f"No products found matching '{search.term}'"
+            warnings = _api_warnings(products)
+            if warnings:
+                result["api_warnings"] = warnings
+            results.append(result)
 
         total_found = sum(r.get("count", 0) for r in results)
         successful = sum(1 for r in results if r.get("success"))
+
+        if successful == 0:
+            first_error = results[0]["error"]
+            raise KrogerToolError(
+                "all_searches_failed",
+                f"All {len(results)} searches failed. The first error was:\n{first_error['message']}",
+                next_step=first_error.get("next_step"),
+                details={"results": results},
+            )
+        if total_found == 0:
+            _check_location_exists(client, location_id)
 
         if ctx:
             await ctx.info(f"Completed {len(searches)} searches: {successful} successful, {total_found} total products found")
 
         return {
-            "success": successful > 0,
+            "success": True,
             "location_id": location_id,
             "searches_completed": len(results),
             "searches_successful": successful,
@@ -461,9 +462,10 @@ def register_tools(mcp):
         }
 
     @mcp.tool()
+    @translate_errors
     async def get_product_details(
-        product_id: str,
-        location_id: Optional[str] = None,
+        product_id: ProductId,
+        location_id: OptionalLocationId = None,
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
@@ -476,114 +478,100 @@ def register_tools(mcp):
         Returns:
             Dictionary containing detailed product information
         """
-        # Use preferred location if none provided
-        if not location_id:
-            location_id = get_preferred_location_id()
-            if not location_id:
-                return {
-                    "success": False,
-                    "error": "No location_id provided and no preferred location set. Use set_preferred_location first."
-                }
+        location_id = resolve_location_id(location_id)
         
         if ctx:
             await ctx.info(f"Getting details for product {product_id} at location {location_id}")
         
         client = get_client_credentials_client()
         
-        try:
-            product_details = client.product.get_product(
-                product_id=product_id,
-                location_id=location_id
+        # An unknown product raises NotFoundError
+        product_details = client.product.get_product(
+            product_id=product_id,
+            location_id=location_id
+        )
+        
+        product = (product_details or {}).get("data")
+        if not isinstance(product, dict):
+            raise KrogerToolError(
+                "unexpected_response",
+                f"The Kroger Products API answered without data for product {product_id}.",
+                details={"response_body": product_details},
             )
             
-            if not product_details or "data" not in product_details:
-                return {
-                    "success": False,
-                    "message": f"Product {product_id} not found"
-                }
-            
-            product = product_details["data"]
-            
-            # Format the detailed product information
-            result = {
-                "success": True,
-                "product_id": product.get("productId"),
-                "upc": product.get("upc"),
-                "description": product.get("description"),
-                "brand": product.get("brand"),
-                "categories": product.get("categories", []),
-                "country_origin": product.get("countryOrigin"),
-                "temperature": product.get("temperature", {}),
-                "location_id": location_id
+        # Format the detailed product information
+        result = {
+            "success": True,
+            "product_id": product.get("productId"),
+            "upc": product.get("upc"),
+            "description": product.get("description"),
+            "brand": product.get("brand"),
+            "categories": product.get("categories", []),
+            "country_origin": product.get("countryOrigin"),
+            "temperature": product.get("temperature", {}),
+            "location_id": location_id
+        }
+        
+        # Add detailed item information
+        if "items" in product and product["items"]:
+            item = product["items"][0]
+            result["item_details"] = {
+                "size": item.get("size"),
+                "sold_by": item.get("soldBy"),
+                "inventory": item.get("inventory", {}),
+                "fulfillment": item.get("fulfillment", {})
             }
             
-            # Add detailed item information
-            if "items" in product and product["items"]:
-                item = product["items"][0]
-                result["item_details"] = {
-                    "size": item.get("size"),
-                    "sold_by": item.get("soldBy"),
-                    "inventory": item.get("inventory", {}),
-                    "fulfillment": item.get("fulfillment", {})
+            # Add detailed pricing
+            if "price" in item:
+                price = item["price"]
+                result["pricing"] = {
+                    "regular_price": price.get("regular"),
+                    "sale_price": price.get("promo"),
+                    "regular_per_unit": price.get("regularPerUnitEstimate"),
+                    "formatted_regular": format_currency(price.get("regular")),
+                    "formatted_sale": format_currency(price.get("promo")),
+                    "on_sale": price.get("promo") is not None and price.get("promo") < price.get("regular", float('inf')),
+                    "savings": price.get("regular", 0) - price.get("promo", price.get("regular", 0)) if price.get("promo") else 0
                 }
-                
-                # Add detailed pricing
-                if "price" in item:
-                    price = item["price"]
-                    result["pricing"] = {
-                        "regular_price": price.get("regular"),
-                        "sale_price": price.get("promo"),
-                        "regular_per_unit": price.get("regularPerUnitEstimate"),
-                        "formatted_regular": format_currency(price.get("regular")),
-                        "formatted_sale": format_currency(price.get("promo")),
-                        "on_sale": price.get("promo") is not None and price.get("promo") < price.get("regular", float('inf')),
-                        "savings": price.get("regular", 0) - price.get("promo", price.get("regular", 0)) if price.get("promo") else 0
-                    }
-            
-            # Add aisle locations
-            if "aisleLocations" in product:
-                result["aisle_locations"] = [
-                    {
-                        "description": aisle.get("description"),
-                        "aisle_number": aisle.get("number"),
-                        "side": aisle.get("side"),
-                        "shelf_number": aisle.get("shelfNumber")
-                    }
-                    for aisle in product["aisleLocations"]
-                ]
-            
-            # Add images
-            if "images" in product and product["images"]:
-                result["images"] = [
-                    {
-                        "perspective": img.get("perspective"),
-                        "sizes": [
-                            {
-                                "size": size.get("size"),
-                                "url": size.get("url")
-                            }
-                            for size in img.get("sizes", [])
-                        ]
-                    }
-                    for img in product["images"]
-                ]
+        
+        # Add aisle locations
+        if "aisleLocations" in product:
+            result["aisle_locations"] = [
+                {
+                    "description": aisle.get("description"),
+                    "aisle_number": aisle.get("number"),
+                    "side": aisle.get("side"),
+                    "shelf_number": aisle.get("shelfNumber")
+                }
+                for aisle in product["aisleLocations"]
+            ]
+        
+        # Add images
+        if "images" in product and product["images"]:
+            result["images"] = [
+                {
+                    "perspective": img.get("perspective"),
+                    "sizes": [
+                        {
+                            "size": size.get("size"),
+                            "url": size.get("url")
+                        }
+                        for size in img.get("sizes", [])
+                    ]
+                }
+                for img in product["images"]
+            ]
 
-            _add_extended_attributes(result, product)
+        _add_extended_attributes(result, product)
 
-            return result
-            
-        except Exception as e:
-            if ctx:
-                await ctx.error(f"Error getting product details: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
+        return result
 
     @mcp.tool()
+    @translate_errors
     async def search_products_by_id(
-        product_id: str,
-        location_id: Optional[str] = None,
+        product_id: ProductId,
+        location_id: OptionalLocationId = None,
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
@@ -596,53 +584,37 @@ def register_tools(mcp):
         Returns:
             Dictionary containing matching products
         """
-        # Use preferred location if none provided
-        if not location_id:
-            location_id = get_preferred_location_id()
-            if not location_id:
-                return {
-                    "success": False,
-                    "error": "No location_id provided and no preferred location set. Use set_preferred_location first."
-                }
+        location_id = resolve_location_id(location_id)
         
         if ctx:
             await ctx.info(f"Searching for products with ID '{product_id}' at location {location_id}")
         
         client = get_client_credentials_client()
         
-        try:
-            products = client.product.search_products(
-                product_id=product_id,
-                location_id=location_id
-            )
-            
-            if not products or "data" not in products or not products["data"]:
-                return {
-                    "success": False,
-                    "message": f"No products found with ID '{product_id}'",
-                    "data": []
-                }
-            
-            formatted_products = [_format_product(p) for p in products["data"]]
-            
-            if ctx:
-                await ctx.info(f"Found {len(formatted_products)} products with ID '{product_id}'")
-            
-            return {
-                "success": True,
-                "search_params": {
-                    "product_id": product_id,
-                    "location_id": location_id
-                },
-                "count": len(formatted_products),
-                "data": formatted_products
-            }
-            
-        except Exception as e:
-            if ctx:
-                await ctx.error(f"Error searching products by ID: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-                "data": []
-            }
+        products = client.product.search_products(
+            product_id=product_id,
+            location_id=location_id
+        )
+        
+        formatted_products = [_format_product(p) for p in (products or {}).get("data") or []]
+        if not formatted_products:
+            _check_location_exists(client, location_id)
+        
+        if ctx:
+            await ctx.info(f"Found {len(formatted_products)} products with ID '{product_id}'")
+        
+        result = {
+            "success": True,
+            "search_params": {
+                "product_id": product_id,
+                "location_id": location_id
+            },
+            "count": len(formatted_products),
+            "data": formatted_products
+        }
+        if not formatted_products:
+            result["message"] = f"No products found with ID '{product_id}'"
+        warnings = _api_warnings(products)
+        if warnings:
+            result["api_warnings"] = warnings
+        return result

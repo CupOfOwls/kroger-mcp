@@ -30,6 +30,7 @@ from .tools import auth_tools
 
 # Import prompts
 from . import prompts
+from .errors import ToolErrorMiddleware
 
 
 def create_server() -> FastMCP:
@@ -65,8 +66,19 @@ def create_server() -> FastMCP:
         This server maintains a local record of items added to your cart since the Kroger API
         doesn't provide cart viewing functionality. When you place an order through the Kroger
         website/app, use mark_order_placed to move the current cart to order history.
+        
+        Errors:
+        A tool that fails returns an error result. Its text says what went wrong and the next
+        step to take. Its structured content holds an "error" object with a "type" (such as
+        invalid_arguments, invalid_parameter, authentication_required, not_found, or
+        rate_limited), a "next_step", and for Kroger API errors the HTTP status, Kroger's error
+        code and message, and a correlation id. Follow the next step instead of retrying
+        the same call unchanged.
         """
     )
+
+    # Return tool failures as error results with structured details
+    mcp.add_middleware(ToolErrorMiddleware())
 
     # Register all tools from the modules
     location_tools.register_tools(mcp)

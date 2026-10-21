@@ -5,6 +5,34 @@ All notable changes to the `kroger-mcp` package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - Unreleased
+
+### Changed
+
+- **Tool failures are MCP error results** (`isError: true`), not successful results with `"success": false`. The text content says what went wrong and the next step to take, so a model that sees only text can recover. The structured content holds an `error` object with a stable `type` (for example `invalid_arguments`, `authentication_required`, `not_found`, `rate_limited`), a `message`, a `next_step` that names the tool to call, and, for Kroger API errors, the HTTP status, Kroger's error code and message, the request, the `X-Correlation-Id`, a hint, and the response body. Before this release an API error returned only "400 Client Error: Bad Request for url: ...". Clients that checked `success == false` must check `isError` instead.
+- **Tool schemas declare the valid values**: location IDs (8 letters or digits), product IDs and UPCs (13 digits), ZIP codes (5 digits), department IDs (2 characters), result limits, `quantity` of 1 or more, and `modality` `PICKUP` or `DELIVERY`. A call that breaks them fails before any request, with an `invalid_arguments` error that lists each bad argument. The cart tools used to send a quantity of -5 or a modality of `BOAT` to Kroger.
+- **`fulfillment` takes the Kroger API's values**: `ais` (in store), `csp` (curbside pickup), `dth` (delivery to home), and `sth` (ship to home). The previous values `delivery` and `pickup` are not API values, and the API ignored them, so results were not filtered. `dth` was rejected.
+- `bulk_search_products` and `bulk_add_to_cart` items have typed fields, and an unknown key is an error (for example `upc` where `product_id` is expected). Every search term is checked before the first search runs. A search that fails gets its own error object in the results, and the call fails only if every search fails.
+- `view_order_history` rejects a `limit` outside 1 to 50 instead of clamping it.
+- A search that finds nothing is a successful result with `count: 0` and a message. It was `success: false`. A product search at a location ID that does not exist is a `not_found` error: the Products API returns an empty result for it, so the server checks the location when a search comes back empty.
+- Warnings in the Products API's `meta.warnings` (for example "The following productIds were not found") are returned as `api_warnings`.
+- `get_preferred_location` with no preferred location, and `test_authentication` and `get_authentication_info` when the user is not signed in, return normal results that say so.
+- `force_reauthenticate` deletes the saved user token. It only cleared the cached client, so the next call loaded the same token again. Its message no longer says that a browser opens.
+- `get_user_zip_code` returns `configured: false` when `KROGER_USER_ZIP_CODE` is not set, because the `10001` it returns then is a placeholder. An invalid `KROGER_USER_ZIP_CODE` is a configuration error.
+- `get_product_images` no longer needs a location, because product images are the same at every store.
+- Requires kroger-api 0.4.0 or later.
+
+### Fixed
+
+- The OAuth `state` was the first 16 characters of the PKCE code verifier, so the authorization URL exposed part of the secret verifier. It is now an independent random value.
+- `start_authentication` without `KROGER_REDIRECT_URI` put `redirect_uri=None` in the authorization URL. It now uses the documented default, `http://localhost:8000/callback`.
+- `complete_authentication` reports a refused authorization (`error=access_denied` in the redirect URL) instead of "Authorization code not found".
+- A new sign-in replaces the cached user client, so cart tools use the new token at once.
+- Tool calls no longer refresh the user token or request a new client-credentials token every time (kroger-api 0.4.0 checks the token's expiry instead of probing an endpoint that does not exist). An expired user token is refreshed before a cart call, and a refresh that fails says why.
+- A cart, order history, or preferences file that cannot be read or is not valid JSON is a `local_state_error`. It was treated as empty, and the next save overwrote it. A failed write is an error too, where it used to be only a line on stderr. State files are written atomically.
+- When the Kroger cart accepts the items but the local cart tracking cannot be saved, the result is a success with a `warning`, so a retry does not add the items twice.
+- Product image downloads time out after 30 seconds.
+
 ## [0.3.1] - 2026-07-08
 
 ### Added

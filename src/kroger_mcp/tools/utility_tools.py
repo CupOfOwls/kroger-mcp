@@ -6,11 +6,14 @@ from typing import Dict, Any
 from datetime import datetime
 from fastmcp import Context
 
+from ..errors import translate_errors
+
 
 def register_tools(mcp):
     """Register utility tools with the FastMCP server"""
     
     @mcp.tool()
+    @translate_errors
     async def get_current_datetime(ctx: Context = None) -> Dict[str, Any]:
         """
         Get the current system date and time.

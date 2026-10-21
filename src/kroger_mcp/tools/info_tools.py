@@ -2,16 +2,38 @@
 Chain and department information tools for Kroger MCP server
 """
 
-from typing import Dict, List, Any, Optional
+from typing import Annotated, Any, Dict, Optional
+from pydantic import Field
 from fastmcp import Context
 
+from ..errors import KrogerToolError, translate_errors
+from .params import DepartmentId
 from .shared import get_client_credentials_client
+
+ChainName = Annotated[str, Field(min_length=1, description="Chain name, for example Kroger or Ralphs. See list_chains.")]
+
+
+def _data(response: Optional[Dict[str, Any]], what: str, expected: type) -> Any:
+    """The data member of a Locations API response
+
+    Raises:
+        KrogerToolError: unexpected_response, if it is missing or has the wrong type
+    """
+    data = (response or {}).get("data")
+    if not isinstance(data, expected):
+        raise KrogerToolError(
+            "unexpected_response",
+            f"The Kroger Locations API answered without the {what} data it documents.",
+            details={"response_body": response},
+        )
+    return data
 
 
 def register_tools(mcp):
     """Register information-related tools with the FastMCP server"""
     
     @mcp.tool()
+    @translate_errors
     async def list_chains(ctx: Context = None) -> Dict[str, Any]:
         """
         Get a list of all Kroger-owned chains.
@@ -23,47 +45,30 @@ def register_tools(mcp):
             await ctx.info("Getting list of Kroger chains")
         
         client = get_client_credentials_client()
+        chains = _data(client.location.list_chains(), "chain list", list)
         
-        try:
-            chains = client.location.list_chains()
-            
-            if not chains or "data" not in chains or not chains["data"]:
-                return {
-                    "success": False,
-                    "message": "No chains found",
-                    "data": []
-                }
-            
-            # Format chain data
-            formatted_chains = [
-                {
-                    "name": chain.get("name"),
-                    "division_numbers": chain.get("divisionNumbers", [])
-                }
-                for chain in chains["data"]
-            ]
-            
-            if ctx:
-                await ctx.info(f"Found {len(formatted_chains)} chains")
-            
-            return {
-                "success": True,
-                "count": len(formatted_chains),
-                "data": formatted_chains
+        # Format chain data
+        formatted_chains = [
+            {
+                "name": chain.get("name"),
+                "division_numbers": chain.get("divisionNumbers", [])
             }
-            
-        except Exception as e:
-            if ctx:
-                await ctx.error(f"Error listing chains: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-                "data": []
-            }
+            for chain in chains
+        ]
+        
+        if ctx:
+            await ctx.info(f"Found {len(formatted_chains)} chains")
+        
+        return {
+            "success": True,
+            "count": len(formatted_chains),
+            "data": formatted_chains
+        }
 
     @mcp.tool()
+    @translate_errors
     async def get_chain_details(
-        chain_name: str,
+        chain_name: ChainName,
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
@@ -79,35 +84,19 @@ def register_tools(mcp):
             await ctx.info(f"Getting details for chain: {chain_name}")
         
         client = get_client_credentials_client()
+        # An unknown chain raises NotFoundError
+        chain = _data(client.location.get_chain(chain_name), f"'{chain_name}' chain", dict)
         
-        try:
-            chain_details = client.location.get_chain(chain_name)
-            
-            if not chain_details or "data" not in chain_details:
-                return {
-                    "success": False,
-                    "message": f"Chain '{chain_name}' not found"
-                }
-            
-            chain = chain_details["data"]
-            
-            return {
-                "success": True,
-                "name": chain.get("name"),
-                "division_numbers": chain.get("divisionNumbers", [])
-            }
-            
-        except Exception as e:
-            if ctx:
-                await ctx.error(f"Error getting chain details: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
+        return {
+            "success": True,
+            "name": chain.get("name"),
+            "division_numbers": chain.get("divisionNumbers", [])
+        }
 
     @mcp.tool()
+    @translate_errors
     async def check_chain_exists(
-        chain_name: str,
+        chain_name: ChainName,
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
@@ -123,26 +112,17 @@ def register_tools(mcp):
             await ctx.info(f"Checking if chain '{chain_name}' exists")
         
         client = get_client_credentials_client()
+        exists = client.location.chain_exists(chain_name)
         
-        try:
-            exists = client.location.chain_exists(chain_name)
-            
-            return {
-                "success": True,
-                "chain_name": chain_name,
-                "exists": exists,
-                "message": f"Chain '{chain_name}' {'exists' if exists else 'does not exist'}"
-            }
-            
-        except Exception as e:
-            if ctx:
-                await ctx.error(f"Error checking chain existence: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
+        return {
+            "success": True,
+            "chain_name": chain_name,
+            "exists": exists,
+            "message": f"Chain '{chain_name}' {'exists' if exists else 'does not exist'}"
+        }
 
     @mcp.tool()
+    @translate_errors
     async def list_departments(ctx: Context = None) -> Dict[str, Any]:
         """
         Get a list of all available departments in Kroger stores.
@@ -154,47 +134,30 @@ def register_tools(mcp):
             await ctx.info("Getting list of departments")
         
         client = get_client_credentials_client()
+        departments = _data(client.location.list_departments(), "department list", list)
         
-        try:
-            departments = client.location.list_departments()
-            
-            if not departments or "data" not in departments or not departments["data"]:
-                return {
-                    "success": False,
-                    "message": "No departments found",
-                    "data": []
-                }
-            
-            # Format department data
-            formatted_departments = [
-                {
-                    "department_id": dept.get("departmentId"),
-                    "name": dept.get("name")
-                }
-                for dept in departments["data"]
-            ]
-            
-            if ctx:
-                await ctx.info(f"Found {len(formatted_departments)} departments")
-            
-            return {
-                "success": True,
-                "count": len(formatted_departments),
-                "data": formatted_departments
+        # Format department data
+        formatted_departments = [
+            {
+                "department_id": dept.get("departmentId"),
+                "name": dept.get("name")
             }
-            
-        except Exception as e:
-            if ctx:
-                await ctx.error(f"Error listing departments: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-                "data": []
-            }
+            for dept in departments
+        ]
+        
+        if ctx:
+            await ctx.info(f"Found {len(formatted_departments)} departments")
+        
+        return {
+            "success": True,
+            "count": len(formatted_departments),
+            "data": formatted_departments
+        }
 
     @mcp.tool()
+    @translate_errors
     async def get_department_details(
-        department_id: str,
+        department_id: DepartmentId,
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
@@ -210,35 +173,19 @@ def register_tools(mcp):
             await ctx.info(f"Getting details for department: {department_id}")
         
         client = get_client_credentials_client()
+        # An unknown department raises NotFoundError
+        dept = _data(client.location.get_department(department_id), f"'{department_id}' department", dict)
         
-        try:
-            dept_details = client.location.get_department(department_id)
-            
-            if not dept_details or "data" not in dept_details:
-                return {
-                    "success": False,
-                    "message": f"Department '{department_id}' not found"
-                }
-            
-            dept = dept_details["data"]
-            
-            return {
-                "success": True,
-                "department_id": dept.get("departmentId"),
-                "name": dept.get("name")
-            }
-            
-        except Exception as e:
-            if ctx:
-                await ctx.error(f"Error getting department details: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
+        return {
+            "success": True,
+            "department_id": dept.get("departmentId"),
+            "name": dept.get("name")
+        }
 
     @mcp.tool()
+    @translate_errors
     async def check_department_exists(
-        department_id: str,
+        department_id: DepartmentId,
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
@@ -254,21 +201,11 @@ def register_tools(mcp):
             await ctx.info(f"Checking if department '{department_id}' exists")
         
         client = get_client_credentials_client()
+        exists = client.location.department_exists(department_id)
         
-        try:
-            exists = client.location.department_exists(department_id)
-            
-            return {
-                "success": True,
-                "department_id": department_id,
-                "exists": exists,
-                "message": f"Department '{department_id}' {'exists' if exists else 'does not exist'}"
-            }
-            
-        except Exception as e:
-            if ctx:
-                await ctx.error(f"Error checking department existence: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
+        return {
+            "success": True,
+            "department_id": department_id,
+            "exists": exists,
+            "message": f"Department '{department_id}' {'exists' if exists else 'does not exist'}"
+        }
