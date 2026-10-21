@@ -57,7 +57,7 @@ ProductLimit = Annotated[int, Field(
 )]
 
 # Literal values cannot be built from validation.FULFILLMENT_TYPES at runtime;
-# test_params checks that the two stay the same.
+# test_literal_parameters_match_kroger_api checks that the two stay the same.
 Fulfillment = Annotated[Optional[Literal["ais", "csp", "dth", "sth"]], Field(
     description=(
         "Only return products available by this fulfillment method: ais (available in store), "

@@ -6,7 +6,7 @@ from fastmcp import Client
 
 from kroger_api.token_storage import save_token
 from kroger_mcp.server import create_server
-from kroger_mcp.tools import auth, shared
+from kroger_mcp.tools import auth_tools, shared
 
 BASE = "https://api.kroger.com"
 TOKEN_URL = f"{BASE}/v1/connect/oauth2/token"
@@ -32,8 +32,8 @@ def isolated(tmp_path, monkeypatch, requests_mock):
     monkeypatch.chdir(cwd)
     monkeypatch.setattr(shared, "_authenticated_client", None)
     monkeypatch.setattr(shared, "_client_credentials_client", None)
-    monkeypatch.setattr(auth, "_pkce_params", None)
-    monkeypatch.setattr(auth, "_auth_state", None)
+    monkeypatch.setattr(auth_tools, "_pkce_params", None)
+    monkeypatch.setattr(auth_tools, "_auth_state", None)
     return data_dir
 
 

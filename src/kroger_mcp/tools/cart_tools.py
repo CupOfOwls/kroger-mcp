@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..errors import KrogerToolError, translate_errors
 from .params import Modality, ProductId, Quantity
-from .shared import get_authenticated_client, load_state_file, save_state_file
+from .shared import get_authenticated_client, invalid_state_file, load_state_file, save_state_file
 
 
 # Cart storage file (resolved to the shared per-user data directory)
@@ -28,10 +28,24 @@ class CartItem(BaseModel):
 
 
 def _load_cart_data() -> Dict[str, Any]:
-    """Load cart data from file"""
+    """Load cart data from file
+
+    Raises:
+        KrogerToolError: local_state_error, if the file cannot be read or its
+            current_cart is not a list of items with integer quantities
+    """
     cart_data = load_state_file(CART_FILE, {})
     cart_data.setdefault("current_cart", [])
     cart_data.setdefault("last_updated", None)
+    items = cart_data["current_cart"]
+    if not isinstance(items, list):
+        raise invalid_state_file(CART_FILE, "current_cart is not a list")
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise invalid_state_file(CART_FILE, f"current_cart[{index}] is not an object")
+        quantity = item.get("quantity", 0)
+        if isinstance(quantity, bool) or not isinstance(quantity, int):
+            raise invalid_state_file(CART_FILE, f"current_cart[{index}].quantity is not an integer")
     return cart_data
 
 
@@ -53,9 +67,9 @@ def _save_order_history(history: List[Dict[str, Any]]) -> None:
 def _add_items_to_local_cart(items: List[Dict[str, Any]]) -> Optional[str]:
     """Add items to the local cart tracking
 
-    The items are already in the Kroger cart when this runs, so a failure
-    here must not fail the tool call: a caller that retries would add the
-    items to the Kroger cart twice.
+    The items are already in the Kroger cart when this runs, so no failure
+    here may fail the tool call: a caller that retries would add the items to
+    the Kroger cart twice. That is why every exception is caught.
 
     Args:
         items: Cart items as sent to the API, with upc, quantity, and modality
@@ -90,12 +104,31 @@ def _add_items_to_local_cart(items: List[Dict[str, Any]]) -> Optional[str]:
         
         cart_data["last_updated"] = now
         _save_cart_data(cart_data)
-    except KrogerToolError as e:
+    except Exception as e:
+        reason = e.message if isinstance(e, KrogerToolError) else f"{type(e).__name__}: {e}"
         return (
-            f"The Kroger cart was updated, but the local cart tracking was not: {e.message} "
+            f"The Kroger cart was updated, but the local cart tracking was not: {reason} "
             f"Do not add the items again."
         )
     return None
+
+
+def _add_to_cart(cart_items: List[Dict[str, Any]]) -> Optional[str]:
+    """Add items to the Kroger cart in one request, then to the local tracking
+
+    The items are added together or not at all.
+
+    Returns:
+        A warning for the tool result if the local tracking was not updated, else None
+
+    Raises:
+        KrogerToolError: authentication_required, if the user is not signed in
+        KrogerAPIError: If Kroger rejects the items or the request fails
+    """
+    client = get_authenticated_client()
+    # add_to_cart returns None on success and raises a kroger-api error on failure
+    client.cart.add_to_cart(cart_items)
+    return _add_items_to_local_cart(cart_items)
 
 
 def register_tools(mcp):
@@ -126,24 +159,7 @@ def register_tools(mcp):
         if ctx:
             await ctx.info(f"Adding {quantity}x {product_id} to cart with {modality} modality")
         
-        # Raises authentication_required if the user is not signed in
-        client = get_authenticated_client()
-        
-        # Format the item for the API
-        cart_item = {
-            "upc": product_id,
-            "quantity": quantity,
-            "modality": modality
-        }
-        
-        if ctx:
-            await ctx.info(f"Calling Kroger API to add item: {cart_item}")
-        
-        # add_to_cart returns None on success and raises a kroger-api error on failure
-        client.cart.add_to_cart([cart_item])
-        
-        if ctx:
-            await ctx.info("Successfully added item to Kroger cart")
+        warning = _add_to_cart([{"upc": product_id, "quantity": quantity, "modality": modality}])
         
         result = {
             "success": True,
@@ -153,7 +169,6 @@ def register_tools(mcp):
             "modality": modality,
             "timestamp": datetime.now().isoformat()
         }
-        warning = _add_items_to_local_cart([cart_item])
         if warning:
             result["warning"] = warning
         return result
@@ -182,22 +197,10 @@ def register_tools(mcp):
         if ctx:
             await ctx.info(f"Adding {len(items)} items to cart in bulk")
         
-        client = get_authenticated_client()
-        
-        # Format items for the API
-        cart_items = [
+        warning = _add_to_cart([
             {"upc": item.product_id, "quantity": item.quantity, "modality": item.modality}
             for item in items
-        ]
-        
-        if ctx:
-            await ctx.info(f"Calling Kroger API to add {len(cart_items)} items")
-        
-        # All items go in one request, so they are added together or not at all
-        client.cart.add_to_cart(cart_items)
-        
-        if ctx:
-            await ctx.info("Successfully added all items to Kroger cart")
+        ])
         
         result = {
             "success": True,
@@ -205,7 +208,6 @@ def register_tools(mcp):
             "items_added": len(items),
             "timestamp": datetime.now().isoformat()
         }
-        warning = _add_items_to_local_cart(cart_items)
         if warning:
             result["warning"] = warning
         return result

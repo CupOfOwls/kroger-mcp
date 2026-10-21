@@ -8,7 +8,7 @@ from fastmcp import Context
 from kroger_api.token_storage import clear_token
 
 from ..errors import KrogerToolError, SIGN_IN_STEP, translate_errors
-from .shared import USER_TOKEN_FILE, get_authenticated_client, invalidate_authenticated_client
+from .shared import USER_TOKEN_FILE, get_authenticated_client, invalidate_authenticated_client, response_data
 
 
 def register_tools(mcp):
@@ -29,16 +29,8 @@ def register_tools(mcp):
             await ctx.info("Getting user profile information")
         
         client = get_authenticated_client()
-        profile = client.identity.get_profile()
-        
-        if not profile or not isinstance(profile.get("data"), dict):
-            raise KrogerToolError(
-                "unexpected_response",
-                "The Kroger Identity API answered without the profile data it documents.",
-                details={"response_body": profile},
-            )
-                
-        profile_id = profile["data"].get("id", "N/A")
+        profile = response_data(client.identity.get_profile(), dict, "Identity", "profile data")
+        profile_id = profile.get("id", "N/A")
         
         if ctx:
             await ctx.info(f"Retrieved profile for user ID: {profile_id}")
@@ -54,10 +46,12 @@ def register_tools(mcp):
     @translate_errors
     async def test_authentication(ctx: Context = None) -> Dict[str, Any]:
         """
-        Test if the current authentication token is valid.
+        Check whether the user is signed in and the saved token has not expired.
 
-        An expired token is refreshed if possible. A user who is not signed in
-        is a normal result (token_valid false), not an error.
+        An expired token is refreshed if possible. The check compares the
+        token's expiry time with the clock, so a sign-in that Kroger revoked
+        early still reports token_valid true until a cart call fails. A user
+        who is not signed in is a normal result (token_valid false), not an error.
         
         Returns:
             Dictionary indicating authentication status

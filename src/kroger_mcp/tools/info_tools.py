@@ -2,31 +2,15 @@
 Chain and department information tools for Kroger MCP server
 """
 
-from typing import Annotated, Any, Dict, Optional
+from typing import Annotated, Any, Dict
 from pydantic import Field
 from fastmcp import Context
 
-from ..errors import KrogerToolError, translate_errors
+from ..errors import translate_errors
 from .params import DepartmentId
-from .shared import get_client_credentials_client
+from .shared import get_client_credentials_client, response_data
 
 ChainName = Annotated[str, Field(min_length=1, description="Chain name, for example Kroger or Ralphs. See list_chains.")]
-
-
-def _data(response: Optional[Dict[str, Any]], what: str, expected: type) -> Any:
-    """The data member of a Locations API response
-
-    Raises:
-        KrogerToolError: unexpected_response, if it is missing or has the wrong type
-    """
-    data = (response or {}).get("data")
-    if not isinstance(data, expected):
-        raise KrogerToolError(
-            "unexpected_response",
-            f"The Kroger Locations API answered without the {what} data it documents.",
-            details={"response_body": response},
-        )
-    return data
 
 
 def register_tools(mcp):
@@ -45,7 +29,7 @@ def register_tools(mcp):
             await ctx.info("Getting list of Kroger chains")
         
         client = get_client_credentials_client()
-        chains = _data(client.location.list_chains(), "chain list", list)
+        chains = response_data(client.location.list_chains(), list, "Locations", "chain list")
         
         # Format chain data
         formatted_chains = [
@@ -85,7 +69,7 @@ def register_tools(mcp):
         
         client = get_client_credentials_client()
         # An unknown chain raises NotFoundError
-        chain = _data(client.location.get_chain(chain_name), f"'{chain_name}' chain", dict)
+        chain = response_data(client.location.get_chain(chain_name), dict, "Locations", f"data for chain '{chain_name}'")
         
         return {
             "success": True,
@@ -134,7 +118,7 @@ def register_tools(mcp):
             await ctx.info("Getting list of departments")
         
         client = get_client_credentials_client()
-        departments = _data(client.location.list_departments(), "department list", list)
+        departments = response_data(client.location.list_departments(), list, "Locations", "department list")
         
         # Format department data
         formatted_departments = [
@@ -174,7 +158,9 @@ def register_tools(mcp):
         
         client = get_client_credentials_client()
         # An unknown department raises NotFoundError
-        dept = _data(client.location.get_department(department_id), f"'{department_id}' department", dict)
+        dept = response_data(
+            client.location.get_department(department_id), dict, "Locations", f"data for department '{department_id}'"
+        )
         
         return {
             "success": True,

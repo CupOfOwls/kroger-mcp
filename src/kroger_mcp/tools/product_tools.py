@@ -10,7 +10,6 @@ import requests
 
 from kroger_api import validation
 from kroger_api.errors import (
-    APIConnectionError,
     BadRequestError,
     InternalServerError,
     InvalidResponseError,
@@ -24,15 +23,18 @@ from .shared import (
     get_client_credentials_client, 
     get_preferred_location_id,
     resolve_location_id,
-    format_currency
+    format_currency,
+    response_data,
 )
 
 # Seconds to wait for a product image download
 IMAGE_TIMEOUT = 30
 
-# Errors that concern one search of a bulk search. Others, such as a rate
-# limit or rejected credentials, would fail every search, so they end the call.
-_PER_SEARCH_ERRORS = (BadRequestError, NotFoundError, InternalServerError, InvalidResponseError, APIConnectionError)
+# Errors that concern one search of a bulk search, so the other searches still
+# run. Any other error, such as a rate limit, rejected credentials, or a
+# network failure, would fail every later search too, so it stops the
+# remaining searches.
+_PER_SEARCH_ERRORS = (BadRequestError, NotFoundError, InternalServerError, InvalidResponseError)
 
 
 class ProductSearch(BaseModel):
@@ -110,8 +112,28 @@ def _add_extended_attributes(formatted: Dict[str, Any], product: Dict[str, Any])
         formatted["additional_info"] = additional
 
 
-def _format_product(product: Dict[str, Any], include_images: bool = True) -> Dict[str, Any]:
-    """Format a raw Kroger product into a consistent structure."""
+def _format_pricing(price: Dict[str, Any]) -> Dict[str, Any]:
+    regular, promo = price.get("regular"), price.get("promo")
+    # The API leaves out promo, or sends 0, when the item is not on sale
+    on_sale = bool(promo) and regular is not None and promo < regular
+    return {
+        "regular_price": regular,
+        "sale_price": promo,
+        "regular_per_unit": price.get("regularPerUnitEstimate"),
+        "formatted_regular": format_currency(regular),
+        "formatted_sale": format_currency(promo),
+        "on_sale": on_sale,
+        "savings": round(regular - promo, 2) if on_sale else 0,
+    }
+
+
+def _format_product(product: Dict[str, Any], all_image_sizes: bool = False) -> Dict[str, Any]:
+    """Format a raw Kroger product into the structure every product tool returns
+
+    Args:
+        product: A product from the Products API
+        all_image_sizes: List every size of each image, not only the first
+    """
     formatted = {
         "product_id": product.get("productId"),
         "upc": product.get("upc"),
@@ -131,16 +153,8 @@ def _format_product(product: Dict[str, Any], include_images: bool = True) -> Dic
             "fulfillment": item.get("fulfillment", {})
         }
 
-        if "price" in item:
-            price = item["price"]
-            formatted["pricing"] = {
-                "regular_price": price.get("regular"),
-                "sale_price": price.get("promo"),
-                "regular_per_unit": price.get("regularPerUnitEstimate"),
-                "formatted_regular": format_currency(price.get("regular")),
-                "formatted_sale": format_currency(price.get("promo")),
-                "on_sale": price.get("promo") is not None and price.get("promo") < price.get("regular", float('inf'))
-            }
+        if isinstance(item.get("price"), dict):
+            formatted["pricing"] = _format_pricing(item["price"])
 
     if "aisleLocations" in product:
         formatted["aisle_locations"] = [
@@ -153,12 +167,20 @@ def _format_product(product: Dict[str, Any], include_images: bool = True) -> Dic
             for aisle in product["aisleLocations"]
         ]
 
-    if include_images and "images" in product and product["images"]:
+    if all_image_sizes and product.get("images"):
         formatted["images"] = [
             {
                 "perspective": img.get("perspective"),
-                "url": img["sizes"][0].get("url") if img.get("sizes") else None,
-                "size": img["sizes"][0].get("size") if img.get("sizes") else None
+                "sizes": [{"size": size.get("size"), "url": size.get("url")} for size in img.get("sizes", [])]
+            }
+            for img in product["images"]
+        ]
+    elif product.get("images"):
+        formatted["images"] = [
+            {
+                "perspective": img.get("perspective"),
+                "url": img["sizes"][0].get("url"),
+                "size": img["sizes"][0].get("size")
             }
             for img in product["images"]
             if img.get("sizes")
@@ -169,10 +191,19 @@ def _format_product(product: Dict[str, Any], include_images: bool = True) -> Dic
     return formatted
 
 
-def _api_warnings(response: Optional[Dict[str, Any]]) -> Optional[List[str]]:
-    """Warnings the Products API puts in meta.warnings, such as product IDs it did not find"""
-    meta = (response or {}).get("meta") or {}
-    return meta.get("warnings") or None
+def _search_results(response: Optional[Dict[str, Any]], result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Add a product search's formatted products and API warnings to result, and return the products
+
+    The Products API puts warnings, such as product IDs it did not find, in
+    meta.warnings.
+    """
+    products = [_format_product(p) for p in (response or {}).get("data") or []]
+    result["count"] = len(products)
+    result["data"] = products
+    warnings = ((response or {}).get("meta") or {}).get("warnings")
+    if warnings:
+        result["api_warnings"] = warnings
+    return products
 
 
 def _check_location_exists(client, location_id: str) -> None:
@@ -235,17 +266,10 @@ def register_tools(mcp):
         client = get_client_credentials_client()
         
         # Get product details to extract image URLs (an unknown product raises NotFoundError)
-        product_details = client.product.get_product(
-            product_id=product_id,
-            location_id=location_id
+        product = response_data(
+            client.product.get_product(product_id=product_id, location_id=location_id),
+            dict, "Products", f"data for product {product_id}",
         )
-        product = (product_details or {}).get("data")
-        if not isinstance(product, dict):
-            raise KrogerToolError(
-                "unexpected_response",
-                f"The Kroger Products API answered without data for product {product_id}.",
-                details={"response_body": product_details},
-            )
         
         images = product.get("images") or []
         if not images:
@@ -338,13 +362,6 @@ def register_tools(mcp):
             brand=brand
         )
         
-        formatted_products = [_format_product(p) for p in (products or {}).get("data") or []]
-        if not formatted_products:
-            _check_location_exists(client, location_id)
-
-        if ctx:
-            await ctx.info(f"Found {len(formatted_products)} products")
-        
         result = {
             "success": True,
             "search_params": {
@@ -354,14 +371,13 @@ def register_tools(mcp):
                 "fulfillment": fulfillment,
                 "brand": brand
             },
-            "count": len(formatted_products),
-            "data": formatted_products
         }
-        if not formatted_products:
+        if not _search_results(products, result):
+            _check_location_exists(client, location_id)
             result["message"] = f"No products found matching '{search_term}' at location {location_id}"
-        warnings = _api_warnings(products)
-        if warnings:
-            result["api_warnings"] = warnings
+
+        if ctx:
+            await ctx.info(f"Found {result['count']} products")
         return result
 
     @mcp.tool()
@@ -384,8 +400,10 @@ def register_tools(mcp):
 
         Returns:
             Dictionary containing results for each search term. A search that fails
-            has success false and an error object; the call fails only if every
-            search fails.
+            has success false and an error object. An error that would fail every
+            later search too, such as a rate limit or a network failure, stops the
+            remaining searches: they have success false and searched false. The
+            call fails only if no search succeeded.
         """
         # Check every term before sending any request
         for index, search in enumerate(searches):
@@ -397,8 +415,12 @@ def register_tools(mcp):
 
         client = get_client_credentials_client()
         results = []
+        stopped_by: Optional[KrogerAPIError] = None
 
         for search in searches:
+            if stopped_by is not None:
+                results.append({"term": search.term, "success": False, "searched": False, "data": []})
+                continue
             if ctx:
                 await ctx.info(f"Searching for '{search.term}'")
 
@@ -410,7 +432,9 @@ def register_tools(mcp):
                     fulfillment=search.fulfillment,
                     brand=search.brand
                 )
-            except _PER_SEARCH_ERRORS as e:
+            except KrogerAPIError as e:
+                if not isinstance(e, _PER_SEARCH_ERRORS):
+                    stopped_by = e
                 if ctx:
                     await ctx.warning(f"Error searching for '{search.term}': {e.message.splitlines()[0]}")
                 results.append({
@@ -421,29 +445,24 @@ def register_tools(mcp):
                 })
                 continue
 
-            formatted_products = [_format_product(p) for p in (products or {}).get("data") or []]
-            result = {
-                "term": search.term,
-                "success": True,
-                "count": len(formatted_products),
-                "data": formatted_products
-            }
-            if not formatted_products:
+            result = {"term": search.term, "success": True}
+            if not _search_results(products, result):
                 result["message"] = f"No products found matching '{search.term}'"
-            warnings = _api_warnings(products)
-            if warnings:
-                result["api_warnings"] = warnings
             results.append(result)
 
         total_found = sum(r.get("count", 0) for r in results)
         successful = sum(1 for r in results if r.get("success"))
 
         if successful == 0:
-            first_error = results[0]["error"]
+            if stopped_by is not None:
+                # The error that stopped the searches, such as a rate limit, is the one to act on
+                error = KrogerToolError.from_api_error(stopped_by)
+                error.details["results"] = results
+                raise error from stopped_by
             raise KrogerToolError(
                 "all_searches_failed",
-                f"All {len(results)} searches failed. The first error was:\n{first_error['message']}",
-                next_step=first_error.get("next_step"),
+                f"All {len(results)} searches failed. The first error was:\n{results[0]['error']['message']}",
+                next_step=results[0]["error"].get("next_step"),
                 details={"results": results},
             )
         if total_found == 0:
@@ -452,14 +471,22 @@ def register_tools(mcp):
         if ctx:
             await ctx.info(f"Completed {len(searches)} searches: {successful} successful, {total_found} total products found")
 
-        return {
+        response = {
             "success": True,
             "location_id": location_id,
-            "searches_completed": len(results),
+            "searches_completed": sum(1 for r in results if r.get("searched", True)),
             "searches_successful": successful,
             "total_products_found": total_found,
             "results": results
         }
+        if stopped_by is not None:
+            error = KrogerToolError.from_api_error(stopped_by)
+            response["stopped_early"] = {
+                "message": f"The remaining searches were not run: {stopped_by.message.splitlines()[0]}",
+                "error_type": error.error_type,
+                "next_step": error.next_step,
+            }
+        return response
 
     @mcp.tool()
     @translate_errors
@@ -486,86 +513,11 @@ def register_tools(mcp):
         client = get_client_credentials_client()
         
         # An unknown product raises NotFoundError
-        product_details = client.product.get_product(
-            product_id=product_id,
-            location_id=location_id
+        product = response_data(
+            client.product.get_product(product_id=product_id, location_id=location_id),
+            dict, "Products", f"data for product {product_id}",
         )
-        
-        product = (product_details or {}).get("data")
-        if not isinstance(product, dict):
-            raise KrogerToolError(
-                "unexpected_response",
-                f"The Kroger Products API answered without data for product {product_id}.",
-                details={"response_body": product_details},
-            )
-            
-        # Format the detailed product information
-        result = {
-            "success": True,
-            "product_id": product.get("productId"),
-            "upc": product.get("upc"),
-            "description": product.get("description"),
-            "brand": product.get("brand"),
-            "categories": product.get("categories", []),
-            "country_origin": product.get("countryOrigin"),
-            "temperature": product.get("temperature", {}),
-            "location_id": location_id
-        }
-        
-        # Add detailed item information
-        if "items" in product and product["items"]:
-            item = product["items"][0]
-            result["item_details"] = {
-                "size": item.get("size"),
-                "sold_by": item.get("soldBy"),
-                "inventory": item.get("inventory", {}),
-                "fulfillment": item.get("fulfillment", {})
-            }
-            
-            # Add detailed pricing
-            if "price" in item:
-                price = item["price"]
-                result["pricing"] = {
-                    "regular_price": price.get("regular"),
-                    "sale_price": price.get("promo"),
-                    "regular_per_unit": price.get("regularPerUnitEstimate"),
-                    "formatted_regular": format_currency(price.get("regular")),
-                    "formatted_sale": format_currency(price.get("promo")),
-                    "on_sale": price.get("promo") is not None and price.get("promo") < price.get("regular", float('inf')),
-                    "savings": price.get("regular", 0) - price.get("promo", price.get("regular", 0)) if price.get("promo") else 0
-                }
-        
-        # Add aisle locations
-        if "aisleLocations" in product:
-            result["aisle_locations"] = [
-                {
-                    "description": aisle.get("description"),
-                    "aisle_number": aisle.get("number"),
-                    "side": aisle.get("side"),
-                    "shelf_number": aisle.get("shelfNumber")
-                }
-                for aisle in product["aisleLocations"]
-            ]
-        
-        # Add images
-        if "images" in product and product["images"]:
-            result["images"] = [
-                {
-                    "perspective": img.get("perspective"),
-                    "sizes": [
-                        {
-                            "size": size.get("size"),
-                            "url": size.get("url")
-                        }
-                        for size in img.get("sizes", [])
-                    ]
-                }
-                for img in product["images"]
-            ]
-
-        _add_extended_attributes(result, product)
-
-        return result
+        return {"success": True, **_format_product(product, all_image_sizes=True), "location_id": location_id}
 
     @mcp.tool()
     @translate_errors
@@ -596,25 +548,17 @@ def register_tools(mcp):
             location_id=location_id
         )
         
-        formatted_products = [_format_product(p) for p in (products or {}).get("data") or []]
-        if not formatted_products:
-            _check_location_exists(client, location_id)
-        
-        if ctx:
-            await ctx.info(f"Found {len(formatted_products)} products with ID '{product_id}'")
-        
         result = {
             "success": True,
             "search_params": {
                 "product_id": product_id,
                 "location_id": location_id
             },
-            "count": len(formatted_products),
-            "data": formatted_products
         }
-        if not formatted_products:
+        if not _search_results(products, result):
+            _check_location_exists(client, location_id)
             result["message"] = f"No products found with ID '{product_id}'"
-        warnings = _api_warnings(products)
-        if warnings:
-            result["api_warnings"] = warnings
+        
+        if ctx:
+            await ctx.info(f"Found {result['count']} products with ID '{product_id}'")
         return result

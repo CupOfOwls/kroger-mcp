@@ -60,6 +60,14 @@ SIGN_IN_STEP = (
 
 RESTART_STEP = "then restart the MCP server. Retrying the tool will not help until then."
 
+# The cart add is the only request this server sends that changes data, so it
+# is the only one whose outcome can be unknown (error.outcome_unknown).
+UNKNOWN_CART_OUTCOME_STEP = (
+    "Do not call the tool again yet: Kroger may have added the items anyway. Ask the user to check "
+    "their cart in the Kroger app or website, then add only the items that are missing. The local "
+    "cart tracking was not updated."
+)
+
 # Longest input value repeated back in an invalid-arguments error
 _MAX_INPUT_CHARS = 200
 
@@ -117,6 +125,8 @@ def translate_errors(fn: Callable) -> Callable:
 
 def next_step_for(error: KrogerAPIError) -> Optional[str]:
     """What the calling model can do about a kroger-api error, naming this server's tools"""
+    if error.outcome_unknown:
+        return UNKNOWN_CART_OUTCOME_STEP
     if isinstance(error, InvalidParameterError):
         return f"Correct {error.param} and call the tool again."
     if isinstance(error, ConfigurationError):

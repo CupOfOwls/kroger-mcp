@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-CLI entry point for Kroger MCP server
+Command-line entry point for the Kroger MCP server
+
+The kroger-mcp and kroger-mcp-cli commands both run main(). Without options,
+the server reads its settings from the environment and uses stdio.
 """
 
 import argparse
 import os
-import sys
-from pathlib import Path
+
 
 def main():
-    """CLI entry point with argument parsing"""
+    """Parse the command-line options, then run the server"""
     parser = argparse.ArgumentParser(
         description="Kroger MCP Server - FastMCP server for Kroger API integration"
     )
@@ -24,8 +26,7 @@ def main():
     )
     parser.add_argument(
         "--redirect-uri", 
-        default="http://localhost:8000/callback",
-        help="OAuth redirect URI (default: http://localhost:8000/callback)"
+        help="OAuth redirect URI (can also use KROGER_REDIRECT_URI env var; default: http://localhost:8000/callback)"
     )
     parser.add_argument(
         "--zip-code", 

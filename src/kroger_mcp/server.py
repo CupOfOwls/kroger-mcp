@@ -16,8 +16,9 @@ Environment Variables Required:
 - KROGER_USER_ZIP_CODE: Default zip code for location searches (optional)
 """
 
-import sys
 from fastmcp import FastMCP
+
+from kroger_api.utils.env import load_env_file
 
 # Import all tool modules
 from .tools import location_tools
@@ -35,6 +36,9 @@ from .errors import ToolErrorMiddleware
 
 def create_server() -> FastMCP:
     """Create and configure the FastMCP server instance"""
+    # A .env file in the working directory supplements the environment
+    load_env_file()
+
     # Initialize the FastMCP server
     mcp = FastMCP(
         name="Kroger API Server",
@@ -96,9 +100,9 @@ def create_server() -> FastMCP:
 
 
 def main():
-    """Main entry point for the Kroger MCP server"""
-    mcp = create_server()
-    mcp.run()
+    """Run the server; the command-line options are in kroger_mcp.cli"""
+    from .cli import main as cli_main
+    cli_main()
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 MCP prompts for the Kroger MCP server
 """
 
-from typing import List, Dict, Any, Optional
+from typing import Optional
 from fastmcp import Context
 
 

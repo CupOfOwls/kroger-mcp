@@ -27,7 +27,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp>=3.0,<4",
+    # 3.4.0 added ToolResult(is_error=...), which the error results need
+    "fastmcp>=3.4.0,<4",
     "kroger-api>=0.4.0",
     "requests",
     "pydantic>=2.0.0",
@@ -44,7 +45,7 @@ dev = [
 ]
 
 [project.scripts]
-kroger-mcp = "kroger_mcp.server:main"
+kroger-mcp = "kroger_mcp.cli:main"
 kroger-mcp-cli = "kroger_mcp.cli:main"
 
 [project.urls]

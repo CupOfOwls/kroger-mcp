@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tool failures are MCP error results** (`isError: true`), not successful results with `"success": false`. The text content says what went wrong and the next step to take, so a model that sees only text can recover. The structured content holds an `error` object with a stable `type` (for example `invalid_arguments`, `authentication_required`, `not_found`, `rate_limited`), a `message`, a `next_step` that names the tool to call, and, for Kroger API errors, the HTTP status, Kroger's error code and message, the request, the `X-Correlation-Id`, a hint, and the response body. Before this release an API error returned only "400 Client Error: Bad Request for url: ...". Clients that checked `success == false` must check `isError` instead.
 - **Tool schemas declare the valid values**: location IDs (8 letters or digits), product IDs and UPCs (13 digits), ZIP codes (5 digits), department IDs (2 characters), result limits, `quantity` of 1 or more, and `modality` `PICKUP` or `DELIVERY`. A call that breaks them fails before any request, with an `invalid_arguments` error that lists each bad argument. The cart tools used to send a quantity of -5 or a modality of `BOAT` to Kroger.
 - **`fulfillment` takes the Kroger API's values**: `ais` (in store), `csp` (curbside pickup), `dth` (delivery to home), and `sth` (ship to home). The previous values `delivery` and `pickup` are not API values, and the API ignored them, so results were not filtered. `dth` was rejected.
-- `bulk_search_products` and `bulk_add_to_cart` items have typed fields, and an unknown key is an error (for example `upc` where `product_id` is expected). Every search term is checked before the first search runs. A search that fails gets its own error object in the results, and the call fails only if every search fails.
+- `bulk_search_products` and `bulk_add_to_cart` items have typed fields, and an unknown key is an error (for example `upc` where `product_id` is expected). Every search term is checked before the first search runs. A search that fails gets its own error object in the results. An error that would fail every later search too, such as a rate limit, rejected credentials, or a network failure, stops the remaining searches: they are listed with `searched: false`, the searches that ran are kept, and `stopped_early` gives the reason and next step. The call fails only if no search succeeded.
 - `view_order_history` rejects a `limit` outside 1 to 50 instead of clamping it.
 - A search that finds nothing is a successful result with `count: 0` and a message. It was `success: false`. A product search at a location ID that does not exist is a `not_found` error: the Products API returns an empty result for it, so the server checks the location when a search comes back empty.
 - Warnings in the Products API's `meta.warnings` (for example "The following productIds were not found") are returned as `api_warnings`.
@@ -20,7 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `force_reauthenticate` deletes the saved user token. It only cleared the cached client, so the next call loaded the same token again. Its message no longer says that a browser opens.
 - `get_user_zip_code` returns `configured: false` when `KROGER_USER_ZIP_CODE` is not set, because the `10001` it returns then is a placeholder. An invalid `KROGER_USER_ZIP_CODE` is a configuration error.
 - `get_product_images` no longer needs a location, because product images are the same at every store.
-- Requires kroger-api 0.4.0 or later.
+- `get_product_details` returns the same product fields as the search tools, plus every size of each image: `item` instead of `item_details`, and `number` instead of `aisle_number` in `aisle_locations`. Search results gain `pricing.savings`, and `on_sale` is false when the API sends a `promo` price of 0.
+- Store addresses include `street2` in `search_locations` too. A store whose hours lack Monday reports `hours_monday: "Hours not available"`.
+- The `kroger-mcp` command takes the same options as `kroger-mcp-cli` (`--transport`, `--zip-code`, and so on); both run `kroger_mcp.cli:main`. `run_server.py` is removed; `python server.py` still works.
+- A `.env` file is read from the working directory when the server starts. It was read from the directories above the installed package.
+- `kroger_mcp.__version__` reports the installed version. It said 0.1.0.
+- Requires kroger-api 0.4.0 or later, and FastMCP 3.4.0 or later: error results need `ToolResult(is_error=...)`, which FastMCP added in 3.4.0. On older versions every error lost its details and next step.
 
 ### Fixed
 
@@ -30,7 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A new sign-in replaces the cached user client, so cart tools use the new token at once.
 - Tool calls no longer refresh the user token or request a new client-credentials token every time (kroger-api 0.4.0 checks the token's expiry instead of probing an endpoint that does not exist). An expired user token is refreshed before a cart call, and a refresh that fails says why.
 - A cart, order history, or preferences file that cannot be read or is not valid JSON is a `local_state_error`. It was treated as empty, and the next save overwrote it. A failed write is an error too, where it used to be only a line on stderr. State files are written atomically.
-- When the Kroger cart accepts the items but the local cart tracking cannot be saved, the result is a success with a `warning`, so a retry does not add the items twice.
+- When the Kroger cart accepts the items but the local cart tracking cannot be updated, for any reason, the result is a success with a `warning`, so a retry does not add the items twice. A cart file whose `current_cart` is not a list of items with integer quantities is a `local_state_error`.
+- A cart add that times out, loses its connection after sending, or gets a 5xx has `outcome_unknown: true`, and its next step says not to call the tool again until the user checks the cart, because Kroger may have added the items anyway. Retrying is suggested only when the request certainly did not reach Kroger.
+- Two server processes that share the token directory (Claude Desktop and Claude Code, for example) no longer sign each other out. When the cached sign-in expires, the token file is read again, and a refresh that Kroger rejects because the other process refreshed first uses that process's new token.
+- `kroger-mcp-cli` without `--redirect-uri` overrode `KROGER_REDIRECT_URI` with its default.
+- State files are written through a temporary file with a unique name, so two server processes never write the same temporary file.
 - Product image downloads time out after 30 seconds.
 
 ## [0.3.1] - 2026-07-08

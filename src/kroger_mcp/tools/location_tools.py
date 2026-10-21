@@ -16,8 +16,21 @@ from .shared import (
     get_client_credentials_client, 
     get_configured_zip_code,
     get_preferred_location_id, 
+    response_data,
     set_preferred_location_id,
 )
+
+RadiusInMiles = Annotated[int, Field(
+    ge=validation.LOCATION_RADIUS_MIN,
+    le=validation.LOCATION_RADIUS_MAX,
+    description=f"Search radius in miles ({validation.LOCATION_RADIUS_MIN}-{validation.LOCATION_RADIUS_MAX})",
+)]
+
+LocationLimit = Annotated[int, Field(
+    ge=validation.LOCATION_LIMIT_MIN,
+    le=validation.LOCATION_LIMIT_MAX,
+    description=f"Number of results to return ({validation.LOCATION_LIMIT_MIN}-{validation.LOCATION_LIMIT_MAX})",
+)]
 
 
 def _default_zip_code() -> str:
@@ -49,14 +62,30 @@ def _location_data(response: Optional[Dict[str, Any]], location_id: str) -> Dict
     Raises:
         KrogerToolError: unexpected_response, if the response has no data object
     """
-    data = (response or {}).get("data")
-    if not isinstance(data, dict):
-        raise KrogerToolError(
-            "unexpected_response",
-            f"The Kroger Locations API answered without data for location {location_id}.",
-            details={"response_body": response},
-        )
-    return data
+    return response_data(response, dict, "Locations", f"data for location {location_id}")
+
+
+def _monday_hours(hours: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Monday's opening hours, for example "06:00 - 22:00", or None if they are not given"""
+    monday = (hours or {}).get("monday")
+    if not isinstance(monday, dict):
+        return None
+    if monday.get("open24", False):
+        return "Open 24 hours"
+    if "open" in monday and "close" in monday:
+        return f"{monday['open']} - {monday['close']}"
+    return None
+
+
+def _address(address: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    address = address or {}
+    return {
+        "street": address.get("addressLine1", ""),
+        "street2": address.get("addressLine2", ""),
+        "city": address.get("city", ""),
+        "state": address.get("state", ""),
+        "zip_code": address.get("zipCode", ""),
+    }
 
 
 def register_tools(mcp):
@@ -66,8 +95,8 @@ def register_tools(mcp):
     @translate_errors
     async def search_locations(
         zip_code: ZipCode = None,
-        radius_in_miles: Annotated[int, Field(ge=1, le=100, description="Search radius in miles (1-100)")] = 10,
-        limit: Annotated[int, Field(ge=1, le=200, description="Number of results to return (1-200)")] = 10,
+        radius_in_miles: RadiusInMiles = 10,
+        limit: LocationLimit = 10,
         chain: Annotated[Optional[str], Field(min_length=1, description="Only return stores of this chain, for example Kroger. See list_chains.")] = None,
         ctx: Context = None
     ) -> Dict[str, Any]:
@@ -104,34 +133,20 @@ def register_tools(mcp):
         # Format location data for easier consumption
         formatted_locations = []
         for loc in (locations or {}).get("data") or []:
-            address = loc.get("address", {})
+            address = _address(loc.get("address"))
             formatted_loc = {
                 "location_id": loc.get("locationId"),
                 "name": loc.get("name"),
                 "chain": loc.get("chain"),
                 "phone": loc.get("phone"),
-                "address": {
-                    "street": address.get("addressLine1", ""),
-                    "city": address.get("city", ""),
-                    "state": address.get("state", ""),
-                    "zip_code": address.get("zipCode", "")
-                },
-                "full_address": f"{address.get('addressLine1', '')}, {address.get('city', '')}, {address.get('state', '')} {address.get('zipCode', '')}",
+                "address": address,
+                "full_address": f"{address['street']}, {address['city']}, {address['state']} {address['zip_code']}",
                 "coordinates": loc.get("geolocation", {}),
                 "departments": [dept.get("name") for dept in loc.get("departments", [])],
                 "department_count": len(loc.get("departments", []))
             }
-            
-            # Add hours info if available
-            if "hours" in loc and "monday" in loc["hours"]:
-                monday = loc["hours"]["monday"]
-                if monday.get("open24", False):
-                    formatted_loc["hours_monday"] = "Open 24 hours"
-                elif "open" in monday and "close" in monday:
-                    formatted_loc["hours_monday"] = f"{monday['open']} - {monday['close']}"
-                else:
-                    formatted_loc["hours_monday"] = "Hours not available"
-            
+            if "hours" in loc:
+                formatted_loc["hours_monday"] = _monday_hours(loc["hours"]) or "Hours not available"
             formatted_locations.append(formatted_loc)
         
         if ctx:
@@ -212,32 +227,19 @@ def register_tools(mcp):
                 "name": dept.get("name"),
                 "phone": dept.get("phone")
             }
-            
-            # Add department hours
-            if "hours" in dept and "monday" in dept["hours"]:
-                monday = dept["hours"]["monday"]
-                if monday.get("open24", False):
-                    dept_info["hours_monday"] = "Open 24 hours"
-                elif "open" in monday and "close" in monday:
-                    dept_info["hours_monday"] = f"{monday['open']} - {monday['close']}"
-            
+            hours = _monday_hours(dept.get("hours"))
+            if hours:
+                dept_info["hours_monday"] = hours
             departments.append(dept_info)
         
         # Format the response
-        address = loc.get("address", {})
         result = {
             "success": True,
             "location_id": loc.get("locationId"),
             "name": loc.get("name"),
             "chain": loc.get("chain"),
             "phone": loc.get("phone"),
-            "address": {
-                "street": address.get("addressLine1", ""),
-                "street2": address.get("addressLine2", ""),
-                "city": address.get("city", ""),
-                "state": address.get("state", ""),
-                "zip_code": address.get("zipCode", "")
-            },
+            "address": _address(loc.get("address")),
             "coordinates": loc.get("geolocation", {}),
             "departments": departments,
             "department_count": len(departments)

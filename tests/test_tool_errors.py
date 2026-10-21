@@ -11,7 +11,7 @@ from kroger_api.errors import NotFoundError
 from kroger_api.token_storage import load_token
 from kroger_mcp.errors import ToolErrorMiddleware
 from kroger_mcp.server import create_server
-from kroger_mcp.tools import auth, cart_tools, params, shared
+from kroger_mcp.tools import auth_tools, cart_tools, params, shared
 
 from conftest import BASE, TOKEN_URL, call_error, call_ok, kroger_error, save_user_token
 
@@ -284,9 +284,9 @@ async def test_start_authentication_uses_an_independent_state(mcp, requests_mock
     result = await call_ok(mcp, "start_authentication")
     query = parse_qs(urlparse(result["auth_url"]).query)
     state = query["state"][0]
-    assert state == auth._auth_state
-    assert state not in auth._pkce_params["code_verifier"]
-    assert query["redirect_uri"] == [auth.DEFAULT_REDIRECT_URI]
+    assert state == auth_tools._auth_state
+    assert state not in auth_tools._pkce_params["code_verifier"]
+    assert query["redirect_uri"] == [auth_tools.DEFAULT_REDIRECT_URI]
 
 
 async def test_complete_authentication_before_start(mcp, requests_mock):
@@ -322,7 +322,7 @@ async def test_complete_authentication_with_a_rejected_code(mcp, requests_mock):
     await call_ok(mcp, "start_authentication")
     requests_mock.post(TOKEN_URL, status_code=400, json={"error": "invalid_grant", "error_description": "invalid code"})
     error, _ = await call_error(mcp, "complete_authentication", {
-        "redirect_url": f"http://localhost:8000/callback?code=abc&state={auth._auth_state}"})
+        "redirect_url": f"http://localhost:8000/callback?code=abc&state={auth_tools._auth_state}"})
     assert error["type"] == "bad_request"
     assert "start_authentication again" in error["next_step"]
 
@@ -336,7 +336,7 @@ async def test_new_sign_in_replaces_the_cached_client(mcp, requests_mock):
     await call_ok(mcp, "start_authentication")
     requests_mock.post(TOKEN_URL, json={"access_token": "new", "refresh_token": "r", "expires_in": 1800})
     await call_ok(mcp, "complete_authentication", {
-        "redirect_url": f"http://localhost:8000/callback?code=abc&state={auth._auth_state}"})
+        "redirect_url": f"http://localhost:8000/callback?code=abc&state={auth_tools._auth_state}"})
     await call_ok(mcp, "add_items_to_cart", {"product_id": PRODUCT})
     assert cart.last_request.headers["Authorization"] == "Bearer new"
 
@@ -371,10 +371,15 @@ async def test_local_tracking_failure_after_a_cart_add_is_a_warning(mcp, request
 async def test_preferred_location_that_cannot_be_saved(mcp, requests_mock, app_token, monkeypatch):
     requests_mock.get(f"{BASE}/v1/locations/{STORE}", json={"data": {"locationId": STORE, "name": "Kroger"}})
 
-    def fail(*args, **kwargs):
-        raise PermissionError(13, "Permission denied")
+    real_replace = shared.os.replace
 
-    monkeypatch.setattr(shared.os, "replace", fail)
+    def fail_for_preferences(source, target):
+        # Token files are saved with os.replace too; only the state file write fails
+        if str(target).endswith(shared.PREFERENCES_FILE):
+            raise PermissionError(13, "Permission denied")
+        real_replace(source, target)
+
+    monkeypatch.setattr(shared.os, "replace", fail_for_preferences)
     error, _ = await call_error(mcp, "set_preferred_location", {"location_id": STORE})
     assert error["type"] == "local_state_error"
     assert "Permission denied" in error["message"]

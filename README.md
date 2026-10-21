@@ -120,7 +120,7 @@ pip install -e .
 
 ### Configuration
 
-Create a `.env` file in your project root or pass in env values via the JSON config:
+Pass the settings in the `env` block of your MCP client's JSON config, or put them in a `.env` file in the directory you start the server from:
 
 ```bash
 # Required: Your Kroger API credentials
@@ -143,6 +143,9 @@ uvx kroger-mcp
 
 # Or with Python directly
 python server.py
+
+# Options such as an HTTP transport (see kroger-mcp --help)
+uvx kroger-mcp --transport streamable-http --port 8000
 
 # With FastMCP CLI for development
 fastmcp dev server.py --with-editable .
@@ -207,7 +210,7 @@ fastmcp dev server.py --with-editable .
 | Tool | Description | Auth Required |
 |------|-------------|---------------|
 | `get_user_profile` | Get authenticated user's profile information | Yes |
-| `test_authentication` | Test if the saved sign-in is valid, refreshing it if it has expired | No |
+| `test_authentication` | Check that the user is signed in and the token has not expired, refreshing it if it has | No |
 | `get_authentication_info` | Get detailed authentication status | No |
 | `force_reauthenticate` | Delete the saved sign-in, so the user can sign in again | No |
 
@@ -257,6 +260,8 @@ A tool that fails returns an MCP error result (`isError: true`), so the assistan
 | `connection_error`, `timeout` | The Kroger API could not be reached, or did not answer within 30 seconds. |
 | `configuration_error` | A setting such as `KROGER_CLIENT_ID` is missing or invalid. Fix the server configuration and restart it. |
 | `local_state_error` | A cart, order history, or preferences file could not be read or written. |
+
+A cart add that times out or gets a 5xx has `outcome_unknown: true`. Kroger may have added the items anyway, so the next step says to have the user check their cart before adding again, instead of retrying.
 
 A search that finds nothing is not an error: it returns `count: 0` and a message. The full list of error types is in the [MCP tools reference](https://cupofowls.github.io/kroger-api/reference/mcp-tools#error-results).
 
