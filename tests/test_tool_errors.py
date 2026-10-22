@@ -289,6 +289,31 @@ async def test_start_authentication_uses_an_independent_state(mcp, requests_mock
     assert query["redirect_uri"] == [auth_tools.DEFAULT_REDIRECT_URI]
 
 
+async def test_sign_in_requests_the_scopes_of_the_cart_and_the_profile(mcp, requests_mock):
+    result = await call_ok(mcp, "start_authentication")
+    query = parse_qs(urlparse(result["auth_url"]).query)
+    assert query["scope"] == ["product.compact cart.basic:write profile.compact"]
+    assert query["code_challenge_method"] == ["S256"]
+
+
+async def test_profile_403_asks_for_a_new_sign_in(mcp, requests_mock):
+    save_user_token()
+    requests_mock.get(f"{BASE}/v1/identity/profile", status_code=403,
+                      json={"code": "AUTH-1007", "reason": "Invalid scope on request", "timestamp": 1})
+    error, _ = await call_error(mcp, "get_user_profile")
+    assert error["type"] == "permission_denied"
+    assert "profile.compact" in error["next_step"]
+    assert "call start_authentication and have the user sign in again" in error["next_step"]
+
+
+async def test_profile_with_a_sign_in_that_grants_the_scope(mcp, requests_mock):
+    save_user_token(scope="product.compact cart.basic:write profile.compact")
+    requests_mock.get(f"{BASE}/v1/identity/profile", json={"data": {"id": "user-1"}})
+    result = await call_ok(mcp, "get_user_profile")
+    assert result["profile_id"] == "user-1"
+    assert requests_mock.last_request.headers["Authorization"] == "Bearer user"
+
+
 async def test_complete_authentication_before_start(mcp, requests_mock):
     error, _ = await call_error(mcp, "complete_authentication",
                                 {"redirect_url": "http://localhost:8000/callback?code=abc&state=x"})

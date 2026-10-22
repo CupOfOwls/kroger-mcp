@@ -214,6 +214,8 @@ fastmcp dev server.py --with-editable .
 | `get_authentication_info` | Get detailed authentication status | No |
 | `force_reauthenticate` | Delete the saved sign-in, so the user can sign in again | No |
 
+`start_authentication` asks the user to grant `cart.basic:write` for the cart tools and `profile.compact` for `get_user_profile`. A sign-in made before version 0.4.0 did not ask for `profile.compact`, so `get_user_profile` fails with `permission_denied` until the user signs in again.
+
 #### Utility Tools
 
 | Tool | Description | Auth Required |
@@ -242,6 +244,12 @@ State files (cart, order history, preferences) and OAuth tokens are stored in th
 3. `%APPDATA%\kroger-mcp\` on Windows
 
 They are never written to the current working directory, which may be read-only or change between sessions under MCP hosts like Claude Desktop. Files from older versions that live in the working directory are migrated automatically on first use.
+
+Several server processes can share the directory, for example one for Claude Desktop and one for Claude Code. Each change to a state file, and each renewal of the sign-in, holds a lock on that file (a `.lock` file beside it), so the processes do not overwrite each other's changes or sign each other out.
+
+### ⚡ Concurrent calls
+
+Each tool that calls the Kroger API or reads a state file runs in a worker thread, so a slow Kroger request holds up only its own call. The assistant's other calls and cancellation go on, and so do the other clients of a server that uses the `streamable-http` or `sse` transport.
 
 ### ⚠️ Error Handling
 

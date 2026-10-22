@@ -8,7 +8,7 @@ from fastmcp import Context
 from kroger_api.token_storage import clear_token
 
 from ..errors import KrogerToolError, SIGN_IN_STEP, translate_errors
-from .shared import USER_TOKEN_FILE, get_authenticated_client, invalidate_authenticated_client, response_data
+from .shared import USER_TOKEN_FILE, get_authenticated_client, invalidate_authenticated_client, log_to_client, response_data
 
 
 def register_tools(mcp):
@@ -16,7 +16,7 @@ def register_tools(mcp):
     
     @mcp.tool()
     @translate_errors
-    async def get_user_profile(ctx: Context = None) -> Dict[str, Any]:
+    def get_user_profile(ctx: Context = None) -> Dict[str, Any]:
         """
         Get the authenticated user's Kroger profile information.
 
@@ -25,15 +25,13 @@ def register_tools(mcp):
         Returns:
             Dictionary containing user profile data
         """
-        if ctx:
-            await ctx.info("Getting user profile information")
+        log_to_client(ctx, "Getting user profile information")
         
         client = get_authenticated_client()
         profile = response_data(client.identity.get_profile(), dict, "Identity", "profile data")
         profile_id = profile.get("id", "N/A")
         
-        if ctx:
-            await ctx.info(f"Retrieved profile for user ID: {profile_id}")
+        log_to_client(ctx, f"Retrieved profile for user ID: {profile_id}")
         
         return {
             "success": True,
@@ -44,7 +42,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def test_authentication(ctx: Context = None) -> Dict[str, Any]:
+    def test_authentication(ctx: Context = None) -> Dict[str, Any]:
         """
         Check whether the user is signed in and the saved token has not expired.
 
@@ -56,8 +54,7 @@ def register_tools(mcp):
         Returns:
             Dictionary indicating authentication status
         """
-        if ctx:
-            await ctx.info("Testing authentication token validity")
+        log_to_client(ctx, "Testing authentication token validity")
         
         try:
             client = get_authenticated_client()
@@ -92,7 +89,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def get_authentication_info(ctx: Context = None) -> Dict[str, Any]:
+    def get_authentication_info(ctx: Context = None) -> Dict[str, Any]:
         """
         Get information about the current authentication state and token.
 
@@ -102,8 +99,7 @@ def register_tools(mcp):
         Returns:
             Dictionary containing authentication information
         """
-        if ctx:
-            await ctx.info("Getting authentication information")
+        log_to_client(ctx, "Getting authentication information")
         
         try:
             client = get_authenticated_client()
@@ -144,7 +140,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def force_reauthenticate(ctx: Context = None) -> Dict[str, Any]:
+    def force_reauthenticate(ctx: Context = None) -> Dict[str, Any]:
         """
         Force re-authentication by clearing the current authentication token.
         Use this if you're having authentication issues or need to log in as a different user.
@@ -155,8 +151,7 @@ def register_tools(mcp):
         Returns:
             Dictionary indicating the re-authentication was initiated
         """
-        if ctx:
-            await ctx.info("Forcing re-authentication by clearing current token")
+        log_to_client(ctx, "Forcing re-authentication by clearing current token")
         
         invalidate_authenticated_client()
         try:
@@ -168,8 +163,7 @@ def register_tools(mcp):
                 next_step="Delete the token file by hand, or check the permissions of its directory.",
             ) from e
         
-        if ctx:
-            await ctx.info("Authentication token cleared")
+        log_to_client(ctx, "Authentication token cleared")
         
         return {
             "success": True,

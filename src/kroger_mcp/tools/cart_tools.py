@@ -9,7 +9,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..errors import KrogerToolError, translate_errors
 from .params import Modality, ProductId, Quantity
-from .shared import get_authenticated_client, invalid_state_file, load_state_file, save_state_file
+from .shared import (
+    get_authenticated_client,
+    invalid_state_file,
+    load_state_file,
+    log_to_client,
+    save_state_file,
+    state_file_lock,
+)
 
 
 # Cart storage file (resolved to the shared per-user data directory)
@@ -78,32 +85,33 @@ def _add_items_to_local_cart(items: List[Dict[str, Any]]) -> Optional[str]:
         A warning for the tool result if the local tracking was not updated, else None
     """
     try:
-        cart_data = _load_cart_data()
-        current_cart = cart_data["current_cart"]
-        now = datetime.now().isoformat()
+        with state_file_lock(CART_FILE):
+            cart_data = _load_cart_data()
+            current_cart = cart_data["current_cart"]
+            now = datetime.now().isoformat()
         
-        for item in items:
-            product_id, quantity, modality = item["upc"], item["quantity"], item["modality"]
-            # Check if item already exists in cart
-            existing_item = next(
-                (i for i in current_cart if i.get("product_id") == product_id and i.get("modality") == modality),
-                None
-            )
-            if existing_item:
-                # Update existing item quantity
-                existing_item["quantity"] = existing_item.get("quantity", 0) + quantity
-                existing_item["last_updated"] = now
-            else:
-                current_cart.append({
-                    "product_id": product_id,
-                    "quantity": quantity,
-                    "modality": modality,
-                    "added_at": now,
-                    "last_updated": now
-                })
+            for item in items:
+                product_id, quantity, modality = item["upc"], item["quantity"], item["modality"]
+                # Check if item already exists in cart
+                existing_item = next(
+                    (i for i in current_cart if i.get("product_id") == product_id and i.get("modality") == modality),
+                    None
+                )
+                if existing_item:
+                    # Update existing item quantity
+                    existing_item["quantity"] = existing_item.get("quantity", 0) + quantity
+                    existing_item["last_updated"] = now
+                else:
+                    current_cart.append({
+                        "product_id": product_id,
+                        "quantity": quantity,
+                        "modality": modality,
+                        "added_at": now,
+                        "last_updated": now
+                    })
         
-        cart_data["last_updated"] = now
-        _save_cart_data(cart_data)
+            cart_data["last_updated"] = now
+            _save_cart_data(cart_data)
     except Exception as e:
         reason = e.message if isinstance(e, KrogerToolError) else f"{type(e).__name__}: {e}"
         return (
@@ -136,7 +144,7 @@ def register_tools(mcp):
     
     @mcp.tool()
     @translate_errors
-    async def add_items_to_cart(
+    def add_items_to_cart(
         product_id: ProductId,
         quantity: Quantity = 1,
         modality: Modality = "PICKUP",
@@ -156,8 +164,7 @@ def register_tools(mcp):
         Returns:
             Dictionary confirming the item was added to cart
         """
-        if ctx:
-            await ctx.info(f"Adding {quantity}x {product_id} to cart with {modality} modality")
+        log_to_client(ctx, f"Adding {quantity}x {product_id} to cart with {modality} modality")
         
         warning = _add_to_cart([{"upc": product_id, "quantity": quantity, "modality": modality}])
         
@@ -175,7 +182,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def bulk_add_to_cart(
+    def bulk_add_to_cart(
         items: Annotated[List[CartItem], Field(min_length=1)],
         ctx: Context = None
     ) -> Dict[str, Any]:
@@ -194,8 +201,7 @@ def register_tools(mcp):
         Returns:
             Dictionary with results for each item
         """
-        if ctx:
-            await ctx.info(f"Adding {len(items)} items to cart in bulk")
+        log_to_client(ctx, f"Adding {len(items)} items to cart in bulk")
         
         warning = _add_to_cart([
             {"upc": item.product_id, "quantity": item.quantity, "modality": item.modality}
@@ -214,7 +220,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def view_current_cart(ctx: Context = None) -> Dict[str, Any]:
+    def view_current_cart(ctx: Context = None) -> Dict[str, Any]:
         """
         View the current cart contents tracked locally.
         
@@ -246,7 +252,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def remove_from_cart(
+    def remove_from_cart(
         product_id: Annotated[str, Field(min_length=1, description="The product ID to remove from the local tracking")],
         modality: Optional[Modality] = None,
         ctx: Context = None
@@ -269,35 +275,36 @@ def register_tools(mcp):
         Returns:
             Dictionary confirming the removal from local tracking
         """
-        cart_data = _load_cart_data()
-        current_cart = cart_data["current_cart"]
-        original_count = len(current_cart)
+        with state_file_lock(CART_FILE):
+            cart_data = _load_cart_data()
+            current_cart = cart_data["current_cart"]
+            original_count = len(current_cart)
         
-        if modality:
-            # Remove specific modality
-            cart_data["current_cart"] = [
-                item for item in current_cart 
-                if not (item.get("product_id") == product_id and item.get("modality") == modality)
-            ]
-        else:
-            # Remove all instances
-            cart_data["current_cart"] = [
-                item for item in current_cart 
-                if item.get("product_id") != product_id
-            ]
+            if modality:
+                # Remove specific modality
+                cart_data["current_cart"] = [
+                    item for item in current_cart 
+                    if not (item.get("product_id") == product_id and item.get("modality") == modality)
+                ]
+            else:
+                # Remove all instances
+                cart_data["current_cart"] = [
+                    item for item in current_cart 
+                    if item.get("product_id") != product_id
+                ]
         
-        items_removed = original_count - len(cart_data["current_cart"])
+            items_removed = original_count - len(cart_data["current_cart"])
         
-        if items_removed > 0:
-            cart_data["last_updated"] = datetime.now().isoformat()
-            _save_cart_data(cart_data)
-            message = f"Removed {items_removed} items from local cart tracking"
-        else:
-            message = (
-                f"No item with product_id {product_id}"
-                + (f" and modality {modality}" if modality else "")
-                + " is in the local cart tracking, so nothing was removed. See view_current_cart."
-            )
+            if items_removed > 0:
+                cart_data["last_updated"] = datetime.now().isoformat()
+                _save_cart_data(cart_data)
+                message = f"Removed {items_removed} items from local cart tracking"
+            else:
+                message = (
+                    f"No item with product_id {product_id}"
+                    + (f" and modality {modality}" if modality else "")
+                    + " is in the local cart tracking, so nothing was removed. See view_current_cart."
+                )
         
         return {
             "success": True,
@@ -309,7 +316,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def clear_current_cart(ctx: Context = None) -> Dict[str, Any]:
+    def clear_current_cart(ctx: Context = None) -> Dict[str, Any]:
         """
         Clear all items from the local cart tracking only.
         
@@ -325,12 +332,13 @@ def register_tools(mcp):
         Returns:
             Dictionary confirming the local cart tracking was cleared
         """
-        cart_data = _load_cart_data()
-        items_count = len(cart_data["current_cart"])
+        with state_file_lock(CART_FILE):
+            cart_data = _load_cart_data()
+            items_count = len(cart_data["current_cart"])
         
-        cart_data["current_cart"] = []
-        cart_data["last_updated"] = datetime.now().isoformat()
-        _save_cart_data(cart_data)
+            cart_data["current_cart"] = []
+            cart_data["last_updated"] = datetime.now().isoformat()
+            _save_cart_data(cart_data)
         
         return {
             "success": True,
@@ -340,7 +348,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def mark_order_placed(
+    def mark_order_placed(
         order_notes: Optional[str] = None,
         ctx: Context = None
     ) -> Dict[str, Any]:
@@ -354,45 +362,46 @@ def register_tools(mcp):
         Returns:
             Dictionary confirming the order was recorded
         """
-        cart_data = _load_cart_data()
-        current_cart = cart_data["current_cart"]
+        with state_file_lock(CART_FILE), state_file_lock(ORDER_HISTORY_FILE):
+            cart_data = _load_cart_data()
+            current_cart = cart_data["current_cart"]
         
-        if not current_cart:
-            raise KrogerToolError(
-                "empty_cart",
-                "The local cart tracking is empty, so there is no order to record.",
-                next_step=(
-                    "Only items added with add_items_to_cart or bulk_add_to_cart are tracked. Items added "
-                    "in the Kroger app or website are not."
-                ),
-            )
+            if not current_cart:
+                raise KrogerToolError(
+                    "empty_cart",
+                    "The local cart tracking is empty, so there is no order to record.",
+                    next_step=(
+                        "Only items added with add_items_to_cart or bulk_add_to_cart are tracked. Items added "
+                        "in the Kroger app or website are not."
+                    ),
+                )
         
-        # Create order record
-        order_record = {
-            "items": current_cart.copy(),
-            "placed_at": datetime.now().isoformat(),
-            "item_count": len(current_cart),
-            "total_quantity": sum(item.get("quantity", 0) for item in current_cart),
-            "notes": order_notes
-        }
+            # Create order record
+            order_record = {
+                "items": current_cart.copy(),
+                "placed_at": datetime.now().isoformat(),
+                "item_count": len(current_cart),
+                "total_quantity": sum(item.get("quantity", 0) for item in current_cart),
+                "notes": order_notes
+            }
         
-        # Load and update order history
-        order_history = _load_order_history()
-        order_history.append(order_record)
-        _save_order_history(order_history)
+            # Load and update order history
+            order_history = _load_order_history()
+            order_history.append(order_record)
+            _save_order_history(order_history)
         
-        # Clear current cart
-        cart_data["current_cart"] = []
-        cart_data["last_updated"] = datetime.now().isoformat()
-        try:
-            _save_cart_data(cart_data)
-        except KrogerToolError as e:
-            raise KrogerToolError(
-                "local_state_error",
-                f"The order was added to the order history, but the local cart could not be cleared: {e.message}",
-                next_step="Do not call mark_order_placed again. Fix the problem, then call clear_current_cart.",
-                details=e.details,
-            ) from e
+            # Clear current cart
+            cart_data["current_cart"] = []
+            cart_data["last_updated"] = datetime.now().isoformat()
+            try:
+                _save_cart_data(cart_data)
+            except KrogerToolError as e:
+                raise KrogerToolError(
+                    "local_state_error",
+                    f"The order was added to the order history, but the local cart could not be cleared: {e.message}",
+                    next_step="Do not call mark_order_placed again. Fix the problem, then call clear_current_cart.",
+                    details=e.details,
+                ) from e
         
         return {
             "success": True,
@@ -405,7 +414,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def view_order_history(
+    def view_order_history(
         limit: Annotated[int, Field(ge=1, le=50, description="Number of recent orders to show (1-50)")] = 10,
         ctx: Context = None
     ) -> Dict[str, Any]:

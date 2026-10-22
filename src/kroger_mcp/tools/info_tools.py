@@ -8,7 +8,7 @@ from fastmcp import Context
 
 from ..errors import translate_errors
 from .params import DepartmentId
-from .shared import get_client_credentials_client, response_data
+from .shared import get_client_credentials_client, log_to_client, response_data
 
 ChainName = Annotated[str, Field(min_length=1, description="Chain name, for example Kroger or Ralphs. See list_chains.")]
 
@@ -18,15 +18,14 @@ def register_tools(mcp):
     
     @mcp.tool()
     @translate_errors
-    async def list_chains(ctx: Context = None) -> Dict[str, Any]:
+    def list_chains(ctx: Context = None) -> Dict[str, Any]:
         """
         Get a list of all Kroger-owned chains.
         
         Returns:
             Dictionary containing chain information
         """
-        if ctx:
-            await ctx.info("Getting list of Kroger chains")
+        log_to_client(ctx, "Getting list of Kroger chains")
         
         client = get_client_credentials_client()
         chains = response_data(client.location.list_chains(), list, "Locations", "chain list")
@@ -40,8 +39,7 @@ def register_tools(mcp):
             for chain in chains
         ]
         
-        if ctx:
-            await ctx.info(f"Found {len(formatted_chains)} chains")
+        log_to_client(ctx, f"Found {len(formatted_chains)} chains")
         
         return {
             "success": True,
@@ -51,7 +49,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def get_chain_details(
+    def get_chain_details(
         chain_name: ChainName,
         ctx: Context = None
     ) -> Dict[str, Any]:
@@ -64,8 +62,7 @@ def register_tools(mcp):
         Returns:
             Dictionary containing chain details
         """
-        if ctx:
-            await ctx.info(f"Getting details for chain: {chain_name}")
+        log_to_client(ctx, f"Getting details for chain: {chain_name}")
         
         client = get_client_credentials_client()
         # An unknown chain raises NotFoundError
@@ -79,7 +76,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def check_chain_exists(
+    def check_chain_exists(
         chain_name: ChainName,
         ctx: Context = None
     ) -> Dict[str, Any]:
@@ -92,8 +89,7 @@ def register_tools(mcp):
         Returns:
             Dictionary indicating whether the chain exists
         """
-        if ctx:
-            await ctx.info(f"Checking if chain '{chain_name}' exists")
+        log_to_client(ctx, f"Checking if chain '{chain_name}' exists")
         
         client = get_client_credentials_client()
         exists = client.location.chain_exists(chain_name)
@@ -107,15 +103,14 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def list_departments(ctx: Context = None) -> Dict[str, Any]:
+    def list_departments(ctx: Context = None) -> Dict[str, Any]:
         """
         Get a list of all available departments in Kroger stores.
         
         Returns:
             Dictionary containing department information
         """
-        if ctx:
-            await ctx.info("Getting list of departments")
+        log_to_client(ctx, "Getting list of departments")
         
         client = get_client_credentials_client()
         departments = response_data(client.location.list_departments(), list, "Locations", "department list")
@@ -129,8 +124,7 @@ def register_tools(mcp):
             for dept in departments
         ]
         
-        if ctx:
-            await ctx.info(f"Found {len(formatted_departments)} departments")
+        log_to_client(ctx, f"Found {len(formatted_departments)} departments")
         
         return {
             "success": True,
@@ -140,7 +134,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def get_department_details(
+    def get_department_details(
         department_id: DepartmentId,
         ctx: Context = None
     ) -> Dict[str, Any]:
@@ -153,8 +147,7 @@ def register_tools(mcp):
         Returns:
             Dictionary containing department details
         """
-        if ctx:
-            await ctx.info(f"Getting details for department: {department_id}")
+        log_to_client(ctx, f"Getting details for department: {department_id}")
         
         client = get_client_credentials_client()
         # An unknown department raises NotFoundError
@@ -170,7 +163,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def check_department_exists(
+    def check_department_exists(
         department_id: DepartmentId,
         ctx: Context = None
     ) -> Dict[str, Any]:
@@ -183,8 +176,7 @@ def register_tools(mcp):
         Returns:
             Dictionary indicating whether the department exists
         """
-        if ctx:
-            await ctx.info(f"Checking if department '{department_id}' exists")
+        log_to_client(ctx, f"Checking if department '{department_id}' exists")
         
         client = get_client_credentials_client()
         exists = client.location.department_exists(department_id)

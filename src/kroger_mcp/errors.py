@@ -24,6 +24,7 @@ ToolErrorMiddleware turns all three into the error result.
 """
 
 import functools
+import inspect
 import logging
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlsplit
@@ -110,13 +111,25 @@ def translate_errors(fn: Callable) -> Callable:
 
     Without it the middleware still returns the same error result, but
     FastMCP first logs each kroger-api exception as an unexpected failure,
-    with a full traceback.
+    with a full traceback. The wrapper is sync for a sync tool, so FastMCP
+    still runs the tool in a worker thread.
     """
 
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def async_wrapper(*args, **kwargs):
+            try:
+                return await fn(*args, **kwargs)
+            except KrogerAPIError as e:
+                raise KrogerToolError.from_api_error(e) from e
+
+        return async_wrapper
+
     @functools.wraps(fn)
-    async def wrapper(*args, **kwargs):
+    def wrapper(*args, **kwargs):
         try:
-            return await fn(*args, **kwargs)
+            return fn(*args, **kwargs)
         except KrogerAPIError as e:
             raise KrogerToolError.from_api_error(e) from e
 
@@ -177,8 +190,10 @@ def _next_step_for_status(error: APIStatusError) -> Optional[str]:
     if isinstance(error, PermissionDeniedError):
         if path.startswith("/v1/identity"):
             return (
-                "The profile needs a sign-in that grants the profile.compact scope, and start_authentication "
-                "requests only product.compact and cart.basic:write. The cart tools do not need the profile."
+                "The profile needs a sign-in that grants the profile.compact scope. Sign-ins made before "
+                "kroger-mcp 0.4.0 did not request it: call start_authentication and have the user sign in "
+                "again. If the error remains, check that the Identity API is enabled for this app in the "
+                "Kroger Developer Portal. The cart tools do not need the profile."
             )
         if user_endpoint:
             return SIGN_IN_STEP

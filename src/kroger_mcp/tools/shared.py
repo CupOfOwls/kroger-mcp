@@ -3,21 +3,33 @@ Shared utilities and client management for Kroger MCP server
 """
 
 import json
+import logging
 import os
 import sys
 import tempfile
-from typing import Any, Optional
+import threading
+from contextlib import contextmanager
+from typing import Any, Generator, Optional
+
+import anyio.from_thread
+from fastmcp import Context
 
 from kroger_api import KrogerClient
-from kroger_api.errors import BadRequestError
+from kroger_api.errors import BadRequestError, NotAuthenticatedError
 from kroger_api.kroger_api import KrogerAPI
 from kroger_api.token_storage import USER_TOKEN_FILE, load_token, get_token_file_path
+from kroger_api.utils.locking import file_lock
 
 from ..errors import KrogerToolError, SIGN_IN_STEP
 
-# Global state for clients and preferred location
+logger = logging.getLogger(__name__)
+
+# The cached clients. FastMCP runs the tools in worker threads, so each cache
+# has a lock: one thread at a time checks it and, if needed, replaces it.
 _authenticated_client: Optional[KrogerAPI] = None
 _client_credentials_client: Optional[KrogerAPI] = None
+_authenticated_client_lock = threading.Lock()
+_client_credentials_client_lock = threading.Lock()
 
 # JSON files for configuration storage
 PREFERENCES_FILE = "kroger_preferences.json"
@@ -26,6 +38,26 @@ PREFERENCES_FILE = "kroger_preferences.json"
 CLIENT_CREDENTIALS_SCOPE = "product.compact"
 
 DEFAULT_ZIP_CODE = "10001"
+
+
+def log_to_client(ctx: Optional[Context], message: str, level: str = "info") -> None:
+    """Send a log message to the MCP client from a tool
+
+    The tools run in worker threads, and the Context methods are async, so
+    the message is sent on the event loop. Sending is best effort: a message
+    that cannot be sent never fails the tool.
+
+    Args:
+        ctx: The tool's Context, or None
+        message: The message
+        level: The Context method to send it with: "info" or "warning"
+    """
+    if ctx is None:
+        return
+    try:
+        anyio.from_thread.run(getattr(ctx, level), message)
+    except Exception as e:
+        logger.debug("Could not send a log message to the client: %s", e)
 
 
 def get_client_credentials_client() -> KrogerAPI:
@@ -41,24 +73,26 @@ def get_client_credentials_client() -> KrogerAPI:
     """
     global _client_credentials_client
 
-    if _client_credentials_client is None:
-        _client_credentials_client = KrogerAPI()
+    with _client_credentials_client_lock:
+        if _client_credentials_client is None:
+            _client_credentials_client = KrogerAPI()
 
-    client = _client_credentials_client
-    token_info = client.client.token_info
-    if not token_info or KrogerClient.is_token_expired(token_info):
-        client.authorization.get_token_with_client_credentials(CLIENT_CREDENTIALS_SCOPE)
-    return client
+        client = _client_credentials_client
+        token_info = client.client.token_info
+        if not token_info or KrogerClient.is_token_expired(token_info):
+            client.authorization.get_token_with_client_credentials(CLIENT_CREDENTIALS_SCOPE)
+        return client
 
 
 def get_authenticated_client() -> KrogerAPI:
     """Get the client for the user's cart and profile
 
-    The client holds the user token saved by complete_authentication, refreshed
-    first if it has expired. When the cached token has expired, the token file
-    is read again first: another server process that shares it (Claude Desktop
-    and Claude Code, for example) may have refreshed the token already, and
-    Kroger may then reject the refresh token this process holds.
+    The client holds the user token saved by complete_authentication, renewed
+    first if it has expired. kroger-api renews it with the token file locked
+    (AuthorizationAPI.load_saved_token): another server process that shares
+    the file (Claude Desktop and Claude Code, for example) may have renewed
+    the token already, and its token is then used instead of sending a
+    refresh token that was already used.
 
     Raises:
         KrogerToolError: authentication_required, if there is no saved sign-in
@@ -69,39 +103,31 @@ def get_authenticated_client() -> KrogerAPI:
     """
     global _authenticated_client
 
-    client = _authenticated_client
-    if client is not None and not KrogerClient.is_token_expired(client.client.token_info):
-        return client
-    _authenticated_client = None
+    with _authenticated_client_lock:
+        client = _authenticated_client
+        if client is not None and not KrogerClient.is_token_expired(client.client.token_info):
+            return client
+        _authenticated_client = None
 
-    token_info = load_token(USER_TOKEN_FILE)
-    if not token_info or not token_info.get("access_token"):
-        raise _authentication_required("The user is not signed in to Kroger, and this tool needs their permission.")
-    client = KrogerAPI()
-    client.client.token_info = token_info
-    client.client.token_file = USER_TOKEN_FILE
-
-    if KrogerClient.is_token_expired(token_info):
-        refresh_token = token_info.get("refresh_token")
-        if not refresh_token:
-            raise _authentication_required(
-                "The user's Kroger sign-in has expired and has no refresh token to renew it with."
-            )
+        saved = load_token(USER_TOKEN_FILE)
+        if not isinstance(saved, dict) or not saved.get("access_token"):
+            raise _authentication_required("The user is not signed in to Kroger, and this tool needs their permission.")
+        client = KrogerAPI()
         try:
-            client.authorization.refresh_token(refresh_token)
+            client.authorization.load_saved_token(USER_TOKEN_FILE)
+        except NotAuthenticatedError as e:
+            raise _authentication_required(
+                f"The user's Kroger sign-in has expired and cannot be renewed: {e.message}"
+            ) from e
         except BadRequestError as e:
-            # Another process may have refreshed the same token a moment ago
-            latest = load_token(USER_TOKEN_FILE)
-            if not latest or latest.get("refresh_token") == refresh_token or KrogerClient.is_token_expired(latest):
-                raise _authentication_required(
-                    f"The user's Kroger sign-in has expired and could not be renewed: "
-                    f"{e.kroger_message or e.message.splitlines()[0]}",
-                    details={"kroger_code": e.kroger_code, "correlation_id": e.correlation_id},
-                ) from e
-            client.client.token_info = latest
+            raise _authentication_required(
+                f"The user's Kroger sign-in has expired and could not be renewed: "
+                f"{e.kroger_message or e.message.splitlines()[0]}",
+                details={"kroger_code": e.kroger_code, "correlation_id": e.correlation_id},
+            ) from e
 
-    _authenticated_client = client
-    return client
+        _authenticated_client = client
+        return client
 
 
 def _authentication_required(message: str, details: Optional[dict] = None) -> KrogerToolError:
@@ -111,7 +137,8 @@ def _authentication_required(message: str, details: Optional[dict] = None) -> Kr
 def invalidate_authenticated_client():
     """Forget the cached user client, so the next cart call reloads the saved token"""
     global _authenticated_client
-    _authenticated_client = None
+    with _authenticated_client_lock:
+        _authenticated_client = None
 
 
 def resolve_data_file(filename: str) -> str:
@@ -132,6 +159,18 @@ def resolve_data_file(filename: str) -> str:
         except Exception as e:
             print(f"Warning: Could not migrate {filename} from CWD: {e}", file=sys.stderr)
     return path
+
+
+@contextmanager
+def state_file_lock(filename: str) -> Generator[None, None, None]:
+    """Hold the lock of a state file while the block reads, changes, and saves it
+
+    Tools run in worker threads, and several server processes can share the
+    state files, so a change made without the lock could be lost to a
+    concurrent one. See kroger_api.utils.locking.file_lock.
+    """
+    with file_lock(resolve_data_file(filename)):
+        yield
 
 
 def load_state_file(filename: str, default: Any) -> Any:
@@ -210,9 +249,10 @@ def get_preferred_location_id() -> Optional[str]:
 
 def set_preferred_location_id(location_id: str) -> None:
     """Set the preferred location ID in preferences file"""
-    preferences = load_state_file(PREFERENCES_FILE, {})
-    preferences["preferred_location_id"] = location_id
-    save_state_file(PREFERENCES_FILE, preferences)
+    with state_file_lock(PREFERENCES_FILE):
+        preferences = load_state_file(PREFERENCES_FILE, {})
+        preferences["preferred_location_id"] = location_id
+        save_state_file(PREFERENCES_FILE, preferences)
 
 
 def resolve_location_id(location_id: Optional[str]) -> str:

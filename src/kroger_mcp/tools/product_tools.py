@@ -23,6 +23,7 @@ from .params import Brand, Fulfillment, OptionalLocationId, ProductId, ProductLi
 from .shared import (
     get_client_credentials_client, 
     get_preferred_location_id,
+    log_to_client,
     resolve_location_id,
     format_currency,
     response_data,
@@ -239,7 +240,7 @@ def register_tools(mcp):
     
     @mcp.tool()
     @translate_errors
-    async def get_product_images(
+    def get_product_images(
         product_id: ProductId,
         perspective: Annotated[str, Field(min_length=1)] = "front",
         location_id: OptionalLocationId = None,
@@ -261,8 +262,7 @@ def register_tools(mcp):
         # Images do not depend on the store, so a location is optional
         location_id = location_id or get_preferred_location_id()
         
-        if ctx:
-            await ctx.info(f"Fetching images for product {product_id} at location {location_id}")
+        log_to_client(ctx, f"Fetching images for product {product_id} at location {location_id}")
         
         client = get_client_credentials_client()
         
@@ -305,8 +305,7 @@ def register_tools(mcp):
                 details={"product_id": product_id, "perspective": perspective},
             )
         
-        if ctx:
-            await ctx.info(f"Downloading {perspective} image from {img_url}")
+        log_to_client(ctx, f"Downloading {perspective} image from {img_url}")
         
         try:
             response = requests.get(img_url, timeout=IMAGE_TIMEOUT)
@@ -325,7 +324,7 @@ def register_tools(mcp):
     
     @mcp.tool()
     @translate_errors
-    async def search_products(
+    def search_products(
         search_term: SearchTerm,
         location_id: OptionalLocationId = None,
         limit: ProductLimit = 10,
@@ -350,8 +349,7 @@ def register_tools(mcp):
         validation.search_term(search_term, param="search_term")
         location_id = resolve_location_id(location_id)
         
-        if ctx:
-            await ctx.info(f"Searching for '{search_term}' at location {location_id}")
+        log_to_client(ctx, f"Searching for '{search_term}' at location {location_id}")
         
         client = get_client_credentials_client()
         
@@ -377,13 +375,12 @@ def register_tools(mcp):
             _check_location_exists(client, location_id)
             result["message"] = f"No products found matching '{search_term}' at location {location_id}"
 
-        if ctx:
-            await ctx.info(f"Found {result['count']} products")
+        log_to_client(ctx, f"Found {result['count']} products")
         return result
 
     @mcp.tool()
     @translate_errors
-    async def bulk_search_products(
+    def bulk_search_products(
         searches: Annotated[List[ProductSearch], Field(min_length=1, max_length=25)],
         location_id: OptionalLocationId = None,
         ctx: Context = None
@@ -413,8 +410,7 @@ def register_tools(mcp):
                 validation.check_non_empty(f"searches[{index}].brand", search.brand)
         location_id = resolve_location_id(location_id)
 
-        if ctx:
-            await ctx.info(f"Running {len(searches)} product searches at location {location_id}")
+        log_to_client(ctx, f"Running {len(searches)} product searches at location {location_id}")
 
         client = get_client_credentials_client()
         results = []
@@ -424,8 +420,7 @@ def register_tools(mcp):
             if stopped_by is not None:
                 results.append({"term": search.term, "success": False, "searched": False, "data": []})
                 continue
-            if ctx:
-                await ctx.info(f"Searching for '{search.term}'")
+            log_to_client(ctx, f"Searching for '{search.term}'")
 
             try:
                 products = client.product.search_products(
@@ -438,8 +433,7 @@ def register_tools(mcp):
             except KrogerAPIError as e:
                 if not isinstance(e, _PER_SEARCH_ERRORS):
                     stopped_by = e
-                if ctx:
-                    await ctx.warning(f"Error searching for '{search.term}': {e.message.splitlines()[0]}")
+                log_to_client(ctx, f"Error searching for '{search.term}': {e.message.splitlines()[0]}", level="warning")
                 results.append({
                     "term": search.term,
                     "success": False,
@@ -471,8 +465,7 @@ def register_tools(mcp):
         if total_found == 0:
             _check_location_exists(client, location_id)
 
-        if ctx:
-            await ctx.info(f"Completed {len(searches)} searches: {successful} successful, {total_found} total products found")
+        log_to_client(ctx, f"Completed {len(searches)} searches: {successful} successful, {total_found} total products found")
 
         response = {
             "success": True,
@@ -493,7 +486,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def get_product_details(
+    def get_product_details(
         product_id: ProductId,
         location_id: OptionalLocationId = None,
         ctx: Context = None
@@ -510,8 +503,7 @@ def register_tools(mcp):
         """
         location_id = resolve_location_id(location_id)
         
-        if ctx:
-            await ctx.info(f"Getting details for product {product_id} at location {location_id}")
+        log_to_client(ctx, f"Getting details for product {product_id} at location {location_id}")
         
         client = get_client_credentials_client()
         
@@ -524,7 +516,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def search_products_by_id(
+    def search_products_by_id(
         product_id: ProductId,
         location_id: OptionalLocationId = None,
         ctx: Context = None
@@ -541,8 +533,7 @@ def register_tools(mcp):
         """
         location_id = resolve_location_id(location_id)
         
-        if ctx:
-            await ctx.info(f"Searching for products with ID '{product_id}' at location {location_id}")
+        log_to_client(ctx, f"Searching for products with ID '{product_id}' at location {location_id}")
         
         client = get_client_credentials_client()
         
@@ -562,6 +553,5 @@ def register_tools(mcp):
             _check_location_exists(client, location_id)
             result["message"] = f"No products found with ID '{product_id}'"
         
-        if ctx:
-            await ctx.info(f"Found {result['count']} products with ID '{product_id}'")
+        log_to_client(ctx, f"Found {result['count']} products with ID '{product_id}'")
         return result

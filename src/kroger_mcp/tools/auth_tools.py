@@ -7,6 +7,7 @@ rather than automated browser opening.
 """
 import os
 import secrets
+import threading
 from typing import Dict, Any
 from fastmcp import Context
 from urllib.parse import urlparse, parse_qs
@@ -16,18 +17,21 @@ from kroger_api.utils import generate_pkce_parameters
 from kroger_api import KrogerAPI
 
 from ..errors import KrogerToolError, translate_errors
-from .shared import invalidate_authenticated_client
+from .shared import invalidate_authenticated_client, log_to_client
 
 DEFAULT_REDIRECT_URI = "http://localhost:8000/callback"
 
-# Scopes needed for Kroger API (cart.basic:write is needed for cart operations)
-USER_SCOPES = "product.compact cart.basic:write"
+# Scopes the user grants: cart.basic:write for the cart tools,
+# profile.compact for get_user_profile (the Identity API)
+USER_SCOPES = "product.compact cart.basic:write profile.compact"
 
 RESTART_SIGN_IN_STEP = "Call start_authentication again and have the user approve access with the new URL."
 
-# Store PKCE parameters between steps
+# The sign-in in progress, from start_authentication to complete_authentication.
+# The tools run in worker threads, so the lock guards both values.
 _pkce_params = None
 _auth_state = None
+_sign_in_lock = threading.Lock()
 
 
 def _new_client() -> KrogerAPI:
@@ -39,7 +43,7 @@ def register_tools(mcp):
     
     @mcp.tool()
     @translate_errors
-    async def start_authentication(ctx: Context = None) -> Dict[str, Any]:
+    def start_authentication(ctx: Context = None) -> Dict[str, Any]:
         """
         Start the OAuth authentication flow with Kroger.
         
@@ -55,23 +59,22 @@ def register_tools(mcp):
         # Raises ConfigurationError if the client ID or secret is missing
         kroger = _new_client()
         
-        # Generate PKCE parameters
-        _pkce_params = generate_pkce_parameters()
-        
+        pkce_params = generate_pkce_parameters()
         # Random state for CSRF protection. It must not be derived from the
         # code verifier, which has to stay secret.
-        _auth_state = secrets.token_urlsafe(16)
+        auth_state = secrets.token_urlsafe(16)
         
         # Get the authorization URL with PKCE
         auth_url = kroger.authorization.get_authorization_url(
             scope=USER_SCOPES,
-            state=_auth_state,
-            code_challenge=_pkce_params["code_challenge"],
-            code_challenge_method=_pkce_params["code_challenge_method"]
+            state=auth_state,
+            code_challenge=pkce_params["code_challenge"],
+            code_challenge_method=pkce_params["code_challenge_method"]
         )
+        with _sign_in_lock:
+            _pkce_params, _auth_state = pkce_params, auth_state
         
-        if ctx:
-            await ctx.info(f"Generated auth URL with PKCE: {auth_url}")
+        log_to_client(ctx, f"Generated auth URL with PKCE: {auth_url}")
         
         return {
             "auth_url": auth_url,
@@ -87,7 +90,7 @@ def register_tools(mcp):
     
     @mcp.tool()
     @translate_errors
-    async def complete_authentication(redirect_url: str, ctx: Context = None) -> Dict[str, Any]:
+    def complete_authentication(redirect_url: str, ctx: Context = None) -> Dict[str, Any]:
         """
         Complete the OAuth flow using the redirect URL from Kroger.
         
@@ -103,7 +106,9 @@ def register_tools(mcp):
         """
         global _pkce_params, _auth_state
         
-        if not _pkce_params or not _auth_state:
+        with _sign_in_lock:
+            pkce_params, auth_state = _pkce_params, _auth_state
+        if not pkce_params or not auth_state:
             raise KrogerToolError(
                 "authentication_not_started",
                 "There is no sign-in in progress. The server may have restarted since start_authentication was called.",
@@ -137,7 +142,7 @@ def register_tools(mcp):
         received_state = query_params.get('state', [None])[0]
         
         # Verify state parameter to prevent CSRF attacks
-        if received_state != _auth_state:
+        if received_state != auth_state:
             raise KrogerToolError(
                 "state_mismatch",
                 "The redirect URL's state parameter does not match the sign-in in progress. The URL may "
@@ -149,21 +154,20 @@ def register_tools(mcp):
         
         # Exchange the authorization code for tokens with the code verifier.
         # A rejected code raises BadRequestError, with the reason from Kroger.
-        if ctx:
-            await ctx.info("Exchanging authorization code for tokens with code_verifier")
+        log_to_client(ctx, "Exchanging authorization code for tokens with code_verifier")
         token_info = kroger.authorization.get_token_with_authorization_code(
             auth_code,
-            code_verifier=_pkce_params["code_verifier"]
+            code_verifier=pkce_params["code_verifier"]
         )
         
-        # Clear PKCE parameters and state after successful exchange
-        _pkce_params = None
-        _auth_state = None
+        # The sign-in is complete, unless a newer one started meanwhile
+        with _sign_in_lock:
+            if _auth_state == auth_state:
+                _pkce_params, _auth_state = None, None
         # The cart tools must use the new token, not a cached client
         invalidate_authenticated_client()
         
-        if ctx:
-            await ctx.info("Authentication successful!")
+        log_to_client(ctx, "Authentication successful!")
         
         return {
             "success": True,

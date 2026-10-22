@@ -15,6 +15,7 @@ from .shared import (
     DEFAULT_ZIP_CODE,
     get_client_credentials_client, 
     get_configured_zip_code,
+    log_to_client,
     get_preferred_location_id, 
     response_data,
     set_preferred_location_id,
@@ -93,7 +94,7 @@ def register_tools(mcp):
     
     @mcp.tool()
     @translate_errors
-    async def search_locations(
+    def search_locations(
         zip_code: ZipCode = None,
         radius_in_miles: RadiusInMiles = 10,
         limit: LocationLimit = 10,
@@ -112,8 +113,7 @@ def register_tools(mcp):
         Returns:
             Dictionary containing location search results
         """
-        if ctx:
-            await ctx.info(f"Searching for Kroger locations near {zip_code or 'default zip code'}")
+        log_to_client(ctx, f"Searching for Kroger locations near {zip_code or 'default zip code'}")
         
         if not zip_code:
             # If Claude isn't provided with a zip code, he will sometimes generate one.
@@ -149,8 +149,7 @@ def register_tools(mcp):
                 formatted_loc["hours_monday"] = _monday_hours(loc["hours"]) or "Hours not available"
             formatted_locations.append(formatted_loc)
         
-        if ctx:
-            await ctx.info(f"Found {len(formatted_locations)} locations")
+        log_to_client(ctx, f"Found {len(formatted_locations)} locations")
         
         result = {
             "success": True,
@@ -173,7 +172,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def get_user_zip_code() -> Dict[str, Any]:
+    def get_user_zip_code() -> Dict[str, Any]:
         """
         Returns user zip code, it is anticipated that by exposing this to the LLM it will choose to use it
         rather than generating a zip code based on system data.
@@ -198,7 +197,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def get_location_details(
+    def get_location_details(
         location_id: LocationId,
         ctx: Context = None
     ) -> Dict[str, Any]:
@@ -211,8 +210,7 @@ def register_tools(mcp):
         Returns:
             Dictionary containing detailed location information
         """
-        if ctx:
-            await ctx.info(f"Getting details for location {location_id}")
+        log_to_client(ctx, f"Getting details for location {location_id}")
         
         client = get_client_credentials_client()
         
@@ -249,7 +247,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def set_preferred_location(
+    def set_preferred_location(
         location_id: LocationId,
         ctx: Context = None
     ) -> Dict[str, Any]:
@@ -262,8 +260,7 @@ def register_tools(mcp):
         Returns:
             Dictionary confirming the preferred location has been set
         """
-        if ctx:
-            await ctx.info(f"Setting preferred location to {location_id}")
+        log_to_client(ctx, f"Setting preferred location to {location_id}")
         
         # Verify the location exists: an unknown location raises NotFoundError
         client = get_client_credentials_client()
@@ -271,8 +268,7 @@ def register_tools(mcp):
         
         set_preferred_location_id(location_id)
         
-        if ctx:
-            await ctx.info(f"Preferred location set to {loc_data.get('name', location_id)}")
+        log_to_client(ctx, f"Preferred location set to {loc_data.get('name', location_id)}")
         
         return {
             "success": True,
@@ -283,7 +279,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def get_preferred_location(ctx: Context = None) -> Dict[str, Any]:
+    def get_preferred_location(ctx: Context = None) -> Dict[str, Any]:
         """
         Get the currently set preferred store location.
 
@@ -302,8 +298,7 @@ def register_tools(mcp):
                 "message": "No preferred location set. Use set_preferred_location to set one."
             }
         
-        if ctx:
-            await ctx.info(f"Getting preferred location details for {preferred_location_id}")
+        log_to_client(ctx, f"Getting preferred location details for {preferred_location_id}")
         
         client = get_client_credentials_client()
         
@@ -331,7 +326,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     @translate_errors
-    async def check_location_exists(
+    def check_location_exists(
         location_id: LocationId,
         ctx: Context = None
     ) -> Dict[str, Any]:
@@ -344,8 +339,7 @@ def register_tools(mcp):
         Returns:
             Dictionary indicating whether the location exists
         """
-        if ctx:
-            await ctx.info(f"Checking if location {location_id} exists")
+        log_to_client(ctx, f"Checking if location {location_id} exists")
         
         client = get_client_credentials_client()
         exists = client.location.location_exists(location_id)
