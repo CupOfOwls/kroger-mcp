@@ -27,8 +27,9 @@ classifiers = [
 ]
 
 dependencies = [
-    # 3.4.0 added ToolResult(is_error=...), which the error results need
-    "fastmcp>=3.4.0,<4",
+    # 3.4.0 added ToolResult(is_error=...), which the error results need, and
+    # 3.4.3 raises fastmcp's ValidationError for invalid arguments (see errors.py)
+    "fastmcp>=3.4.3,<4",
     # The tools run in worker threads and send log messages with anyio.from_thread
     "anyio>=4.5",
     "kroger-api>=0.4.0",
