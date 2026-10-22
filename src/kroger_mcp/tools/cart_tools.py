@@ -89,7 +89,7 @@ def _add_items_to_local_cart(items: List[Dict[str, Any]]) -> Optional[str]:
             cart_data = _load_cart_data()
             current_cart = cart_data["current_cart"]
             now = datetime.now().isoformat()
-        
+
             for item in items:
                 product_id, quantity, modality = item["upc"], item["quantity"], item["modality"]
                 # Check if item already exists in cart
@@ -109,7 +109,7 @@ def _add_items_to_local_cart(items: List[Dict[str, Any]]) -> Optional[str]:
                         "added_at": now,
                         "last_updated": now
                     })
-        
+
             cart_data["last_updated"] = now
             _save_cart_data(cart_data)
     except Exception as e:
@@ -279,22 +279,22 @@ def register_tools(mcp):
             cart_data = _load_cart_data()
             current_cart = cart_data["current_cart"]
             original_count = len(current_cart)
-        
+
             if modality:
                 # Remove specific modality
                 cart_data["current_cart"] = [
-                    item for item in current_cart 
+                    item for item in current_cart
                     if not (item.get("product_id") == product_id and item.get("modality") == modality)
                 ]
             else:
                 # Remove all instances
                 cart_data["current_cart"] = [
-                    item for item in current_cart 
+                    item for item in current_cart
                     if item.get("product_id") != product_id
                 ]
-        
+
             items_removed = original_count - len(cart_data["current_cart"])
-        
+
             if items_removed > 0:
                 cart_data["last_updated"] = datetime.now().isoformat()
                 _save_cart_data(cart_data)
@@ -365,7 +365,7 @@ def register_tools(mcp):
         with state_file_lock(CART_FILE), state_file_lock(ORDER_HISTORY_FILE):
             cart_data = _load_cart_data()
             current_cart = cart_data["current_cart"]
-        
+
             if not current_cart:
                 raise KrogerToolError(
                     "empty_cart",
@@ -375,7 +375,7 @@ def register_tools(mcp):
                         "in the Kroger app or website are not."
                     ),
                 )
-        
+
             # Create order record
             order_record = {
                 "items": current_cart.copy(),
