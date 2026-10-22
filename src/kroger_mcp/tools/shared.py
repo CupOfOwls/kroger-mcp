@@ -17,7 +17,7 @@ from fastmcp import Context
 from kroger_api import KrogerClient
 from kroger_api.errors import BadRequestError, NotAuthenticatedError
 from kroger_api.kroger_api import KrogerAPI
-from kroger_api.token_storage import USER_TOKEN_FILE, load_token, get_token_file_path
+from kroger_api.token_storage import USER_TOKEN_FILE, clear_token, load_token, get_token_file_path
 from kroger_api.utils.locking import file_lock
 
 from ..errors import KrogerToolError, SIGN_IN_STEP
@@ -139,6 +139,22 @@ def invalidate_authenticated_client():
     global _authenticated_client
     with _authenticated_client_lock:
         _authenticated_client = None
+
+
+def sign_out() -> None:
+    """Delete the saved user token and forget the cached user client
+
+    The cache lock is held for both steps. Otherwise a concurrent tool call
+    could load the token file between them, cache the old sign-in, and keep
+    using it until it expires.
+
+    Raises:
+        OSError: If the token file cannot be deleted
+    """
+    global _authenticated_client
+    with _authenticated_client_lock:
+        _authenticated_client = None
+        clear_token(USER_TOKEN_FILE)
 
 
 def resolve_data_file(filename: str) -> str:

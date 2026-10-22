@@ -330,8 +330,8 @@ async def test_profile_403_explains_how_to_get_the_profile_scope(mcp, requests_m
     assert "call start_authentication and have the user sign in again" in error["next_step"]
 
 
-async def test_profile_with_a_sign_in_that_grants_the_scope(mcp, requests_mock):
-    save_user_token(scope="product.compact cart.basic:write profile.compact")
+async def test_profile_returns_the_profile_id(mcp, requests_mock):
+    save_user_token()
     requests_mock.get(f"{BASE}/v1/identity/profile", json={"data": {"id": "user-1"}})
     result = await call_ok(mcp, "get_user_profile")
     assert result["profile_id"] == "user-1"

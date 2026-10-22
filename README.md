@@ -253,7 +253,7 @@ Several server processes can share the directory, for example one for Claude Des
 
 ### ⚡ Concurrent calls
 
-Each tool that calls the Kroger API or reads a state file runs in a worker thread, so a slow Kroger request holds up only its own call. The assistant's other calls and cancellation go on, and so do the other clients of a server that uses the `streamable-http` or `sse` transport.
+Each tool that calls the Kroger API or reads a state file runs in a worker thread, so a slow Kroger request holds up only its own call. The assistant's other calls go on, and so do the other clients of a server that uses the `streamable-http` or `sse` transport. Cancelling a call answers at once, but the request it already sent still finishes: a cancelled `add_items_to_cart` can still add the items.
 
 ### ⚠️ Error Handling
 

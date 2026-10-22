@@ -5,10 +5,8 @@ User profile and authentication tools for Kroger MCP server
 from typing import Dict, Any
 from fastmcp import Context
 
-from kroger_api.token_storage import clear_token
-
 from ..errors import KrogerToolError, SIGN_IN_STEP, translate_errors
-from .shared import USER_TOKEN_FILE, get_authenticated_client, invalidate_authenticated_client, log_to_client, response_data
+from .shared import get_authenticated_client, log_to_client, response_data, sign_out
 
 
 def register_tools(mcp):
@@ -153,9 +151,8 @@ def register_tools(mcp):
         """
         log_to_client(ctx, "Forcing re-authentication by clearing current token")
         
-        invalidate_authenticated_client()
         try:
-            clear_token(USER_TOKEN_FILE)
+            sign_out()
         except OSError as e:
             raise KrogerToolError(
                 "local_state_error",
