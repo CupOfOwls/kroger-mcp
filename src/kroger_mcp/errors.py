@@ -190,10 +190,12 @@ def _next_step_for_status(error: APIStatusError) -> Optional[str]:
     if isinstance(error, PermissionDeniedError):
         if path.startswith("/v1/identity"):
             return (
-                "The profile needs a sign-in that grants the profile.compact scope. Sign-ins made before "
-                "kroger-mcp 0.4.0 did not request it: call start_authentication and have the user sign in "
-                "again. If the error remains, check that the Identity API is enabled for this app in the "
-                "Kroger Developer Portal. The cart tools do not need the profile."
+                "The profile needs a sign-in that grants the profile.compact scope, which start_authentication "
+                "requests only when KROGER_USER_SCOPES in this MCP server's configuration includes it. Ask the "
+                "user to check that the app is registered for the Identity API in the Kroger Developer Portal, "
+                "and to set KROGER_USER_SCOPES to 'product.compact cart.basic:write profile.compact' and restart "
+                "the server if it does not include profile.compact. Then call start_authentication and have the "
+                "user sign in again. The cart tools do not need the profile."
             )
         if user_endpoint:
             return SIGN_IN_STEP

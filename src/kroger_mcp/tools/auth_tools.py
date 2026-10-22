@@ -21,9 +21,12 @@ from .shared import invalidate_authenticated_client, log_to_client
 
 DEFAULT_REDIRECT_URI = "http://localhost:8000/callback"
 
-# Scopes the user grants: cart.basic:write for the cart tools,
-# profile.compact for get_user_profile (the Identity API)
-USER_SCOPES = "product.compact cart.basic:write profile.compact"
+# The scopes the user grants unless KROGER_USER_SCOPES lists others:
+# cart.basic:write for the cart tools. get_user_profile also needs
+# profile.compact, but an app may request only the scopes of the API products
+# it is registered for, and Kroger refuses the whole sign-in (invalid_scope)
+# when one is missing. So profile.compact is requested only on request.
+DEFAULT_USER_SCOPES = "product.compact cart.basic:write"
 
 RESTART_SIGN_IN_STEP = "Call start_authentication again and have the user approve access with the new URL."
 
@@ -38,6 +41,13 @@ def _new_client() -> KrogerAPI:
     return KrogerAPI(redirect_uri=os.environ.get("KROGER_REDIRECT_URI") or DEFAULT_REDIRECT_URI)
 
 
+def user_scopes() -> str:
+    """The scopes start_authentication requests: KROGER_USER_SCOPES (separated
+    by spaces or commas), else DEFAULT_USER_SCOPES"""
+    scopes = os.environ.get("KROGER_USER_SCOPES", "").replace(",", " ").split()
+    return " ".join(dict.fromkeys(scopes)) or DEFAULT_USER_SCOPES
+
+
 def register_tools(mcp):
     """Register authentication-specific tools with the FastMCP server"""
     
@@ -50,9 +60,12 @@ def register_tools(mcp):
         This tool returns a URL that the user needs to open in their browser
         to authenticate with Kroger. After authorization, the user will be
         redirected to a callback URL that they need to copy and paste back.
+        If Kroger shows invalid_scope instead of the sign-in page, the app is
+        not registered for one of the requested scopes (the scope field of
+        the result, set by KROGER_USER_SCOPES in the server's configuration).
         
         Returns:
-            Dictionary with authorization URL and instructions
+            Dictionary with authorization URL, the requested scopes, and instructions
         """
         global _pkce_params, _auth_state
         
@@ -65,8 +78,9 @@ def register_tools(mcp):
         auth_state = secrets.token_urlsafe(16)
         
         # Get the authorization URL with PKCE
+        scope = user_scopes()
         auth_url = kroger.authorization.get_authorization_url(
-            scope=USER_SCOPES,
+            scope=scope,
             state=auth_state,
             code_challenge=pkce_params["code_challenge"],
             code_challenge_method=pkce_params["code_challenge_method"]
@@ -78,6 +92,7 @@ def register_tools(mcp):
         
         return {
             "auth_url": auth_url,
+            "scope": scope,
             "instructions": (
                 "1. Click this link to authorize: [🔗 Authorize Kroger Access]({auth_url})\n"
                 "   - Please present the authorization URL as a clickable markdown link\n"
@@ -122,10 +137,18 @@ def register_tools(mcp):
         if "error" in query_params:
             error = query_params["error"][0]
             description = query_params.get("error_description", [None])[0]
+            next_step = RESTART_SIGN_IN_STEP
+            if error == "invalid_scope":
+                next_step = (
+                    f"The app is not registered for one of the scopes the sign-in asked for ({user_scopes()}). "
+                    "Ask the user to add the missing API product to the app in the Kroger Developer Portal, or "
+                    "to remove the scope from KROGER_USER_SCOPES in this MCP server's configuration (the default "
+                    f"is '{DEFAULT_USER_SCOPES}') and restart the server. Then call start_authentication again."
+                )
             raise KrogerToolError(
                 "authorization_failed",
                 f"Kroger did not authorize the app: {error}" + (f" ({description})" if description else ""),
-                next_step=RESTART_SIGN_IN_STEP,
+                next_step=next_step,
                 details={"oauth_error": error, "oauth_error_description": description},
             )
             

@@ -289,20 +289,44 @@ async def test_start_authentication_uses_an_independent_state(mcp, requests_mock
     assert query["redirect_uri"] == [auth_tools.DEFAULT_REDIRECT_URI]
 
 
-async def test_sign_in_requests_the_scopes_of_the_cart_and_the_profile(mcp, requests_mock):
+async def test_sign_in_requests_only_the_cart_scopes_by_default(mcp, requests_mock):
+    """An app that is not registered for the Identity API could not sign in at all if profile.compact were requested"""
     result = await call_ok(mcp, "start_authentication")
     query = parse_qs(urlparse(result["auth_url"]).query)
-    assert query["scope"] == ["product.compact cart.basic:write profile.compact"]
+    assert query["scope"] == ["product.compact cart.basic:write"]
+    assert result["scope"] == "product.compact cart.basic:write"
     assert query["code_challenge_method"] == ["S256"]
 
 
-async def test_profile_403_asks_for_a_new_sign_in(mcp, requests_mock):
+@pytest.mark.parametrize("setting", ["product.compact cart.basic:write profile.compact",
+                                     " product.compact, cart.basic:write,profile.compact cart.basic:write "])
+async def test_sign_in_requests_the_scopes_in_kroger_user_scopes(mcp, requests_mock, monkeypatch, setting):
+    monkeypatch.setenv("KROGER_USER_SCOPES", setting)
+    result = await call_ok(mcp, "start_authentication")
+    query = parse_qs(urlparse(result["auth_url"]).query)
+    assert query["scope"] == ["product.compact cart.basic:write profile.compact"]
+    assert result["scope"] == "product.compact cart.basic:write profile.compact"
+
+
+async def test_refused_scope_explains_kroger_user_scopes(mcp, requests_mock, monkeypatch):
+    monkeypatch.setenv("KROGER_USER_SCOPES", "product.compact cart.basic:write profile.compact")
+    await call_ok(mcp, "start_authentication")
+    error, _ = await call_error(mcp, "complete_authentication", {
+        "redirect_url": "http://localhost:8000/callback?error=invalid_scope&error_description=invalid+scope"})
+    assert error["type"] == "authorization_failed"
+    assert "(product.compact cart.basic:write profile.compact)" in error["next_step"]
+    assert "remove the scope from KROGER_USER_SCOPES" in error["next_step"]
+    assert "Kroger Developer Portal" in error["next_step"]
+
+
+async def test_profile_403_explains_how_to_get_the_profile_scope(mcp, requests_mock):
     save_user_token()
     requests_mock.get(f"{BASE}/v1/identity/profile", status_code=403,
                       json={"code": "AUTH-1007", "reason": "Invalid scope on request", "timestamp": 1})
     error, _ = await call_error(mcp, "get_user_profile")
     assert error["type"] == "permission_denied"
-    assert "profile.compact" in error["next_step"]
+    assert "registered for the Identity API" in error["next_step"]
+    assert "KROGER_USER_SCOPES to 'product.compact cart.basic:write profile.compact'" in error["next_step"]
     assert "call start_authentication and have the user sign in again" in error["next_step"]
 
 

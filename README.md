@@ -130,6 +130,10 @@ KROGER_REDIRECT_URI=http://localhost:8000/callback
 
 # Optional: Default zip code for location searches
 KROGER_USER_ZIP_CODE=90274
+
+# Optional: The scopes the user grants at sign-in (default: product.compact cart.basic:write).
+# Add profile.compact for get_user_profile, but only if your app is registered for the Identity API.
+# KROGER_USER_SCOPES=product.compact cart.basic:write profile.compact
 ```
 
 ### Running the Server
@@ -214,7 +218,7 @@ fastmcp dev server.py --with-editable .
 | `get_authentication_info` | Get detailed authentication status | No |
 | `force_reauthenticate` | Delete the saved sign-in, so the user can sign in again | No |
 
-`start_authentication` asks the user to grant `cart.basic:write` for the cart tools and `profile.compact` for `get_user_profile`. A sign-in made before version 0.4.0 did not ask for `profile.compact`, so `get_user_profile` fails with `permission_denied` until the user signs in again.
+`start_authentication` asks the user to grant `product.compact` and `cart.basic:write`, which the cart tools need. `get_user_profile` also needs `profile.compact`, from the Identity API. An app may request only the scopes of the API products it is registered for, and Kroger refuses the whole sign-in with `invalid_scope` when one is missing, so `profile.compact` is not requested by default. To use `get_user_profile`, register the Identity API for your app in the Kroger Developer Portal, set `KROGER_USER_SCOPES` to `product.compact cart.basic:write profile.compact`, restart the server, and sign in again.
 
 #### Utility Tools
 
