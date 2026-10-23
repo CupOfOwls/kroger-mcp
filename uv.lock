@@ -775,7 +775,7 @@ wheels = [
 
 [[package]]
 name = "kroger-api"
-version = "0.3.1"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
@@ -783,20 +783,20 @@ dependencies = [
     { name = "requests" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d5/6b/ea2f58f2502c204ca1fe8cc4bda530d17639ebef3c56e87884efe520cb46/kroger_api-0.3.1.tar.gz", hash = "sha256:bae9cd1a8825d9e932e3d268f9035e6f1d7274859177a1ac8693b9ad7dba6d70", size = 35871, upload-time = "2026-07-09T03:00:30.63Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a7/9b/e765120525e5cd77a0315a3c5d796861809570764a42879bd064ce43ac33/kroger_api-0.4.0.tar.gz", hash = "sha256:a2db5a48c7d3179b2b705a75fed284287113f217107c4fb0e2044820282740ac", size = 74472, upload-time = "2026-10-23T04:08:02.363Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ef/20/c96719aeeed17ae1c68c22d33f8233ea915eecfd790d4cd06c80ac520135/kroger_api-0.3.1-py3-none-any.whl", hash = "sha256:99ed30581a19f8b472b7c314a332b36ad9db970d5385ce29cbe30a87f3f4d25f", size = 24231, upload-time = "2026-07-09T03:00:29.568Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/6e/7ea5899715ee2708a0d10e2620c36110f2d2480f35d6bd498e5532f85faf/kroger_api-0.4.0-py3-none-any.whl", hash = "sha256:dc941d61b5b7c13c34ac6be6c6eb5b12a5fbc88a257aebf4e20216a662a9a887", size = 67479, upload-time = "2026-10-23T04:08:01.134Z" },
 ]
 
 [[package]]
 name = "kroger-mcp"
-version = "0.3.1"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "fastmcp" },
     { name = "kroger-api" },
     { name = "pydantic" },
-    { name = "python-dotenv" },
     { name = "requests" },
 ]
 
@@ -805,19 +805,21 @@ dev = [
     { name = "black" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "requests-mock" },
     { name = "ruff" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.5" },
     { name = "black", marker = "extra == 'dev'" },
-    { name = "fastmcp", specifier = ">=3.0,<4" },
-    { name = "kroger-api", specifier = ">=0.3.1" },
+    { name = "fastmcp", specifier = ">=3.4.3,<4" },
+    { name = "kroger-api", specifier = ">=0.4.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-asyncio", marker = "extra == 'dev'" },
-    { name = "python-dotenv" },
     { name = "requests" },
+    { name = "requests-mock", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'" },
 ]
 provides-extras = ["dev"]
@@ -1348,6 +1350,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/63/70/2bf7780ad2d390a8d301ad0b550f1581eadbd9a20f896afe06353c2a2913/requests-2.32.3.tar.gz", hash = "sha256:55365417734eb18255590a9ff9eb97e9e1da868d4ccd6402399eaf68af20a760", size = 131218, upload-time = "2024-05-29T15:37:49.536Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f9/9b/335f9764261e915ed497fcdeb11df5dfd6f7bf257d4a6a2a686d80da4d54/requests-2.32.3-py3-none-any.whl", hash = "sha256:70761cfe03c773ceb22aa2f671b4757976145175cdfca038c02654d061d6dcc6", size = 64928, upload-time = "2024-05-29T15:37:47.027Z" },
+]
+
+[[package]]
+name = "requests-mock"
+version = "1.12.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/92/32/587625f91f9a0a3d84688bf9cfc4b2480a7e8ec327cefd0ff2ac891fd2cf/requests-mock-1.12.1.tar.gz", hash = "sha256:e9e12e333b525156e82a3c852f22016b9158220d2f47454de9cae8a77d371401", size = 60901, upload-time = "2024-03-29T03:54:29.446Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/97/ec/889fbc557727da0c34a33850950310240f2040f3b1955175fdb2b36a8910/requests_mock-1.12.1-py2.py3-none-any.whl", hash = "sha256:b1e37054004cdd5e56c84454cc7df12b25f90f382159087f4b6915aaeef39563", size = 27695, upload-time = "2024-03-29T03:54:27.64Z" },
 ]
 
 [[package]]
