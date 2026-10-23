@@ -1,0 +1,90 @@
+name: Tests
+
+# Runs on pushes to main and on pull requests, and the release workflow calls it to test the exact files it
+# is about to publish. Each job installs the wheel and runs tests/ against it; the package source lives
+# under src/, which is not on the import path, so the tests import the installed wheel.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+    inputs:
+      dist-artifact:
+        description: Name of an uploaded artifact holding the sdist and wheel to test, instead of building them
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: ${{ matrix.os }}, Python ${{ matrix.python }}${{ matrix.lowest && ', lowest dependencies' || '' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        # The oldest and newest Python versions the package supports
+        python: ["3.10", "3.14"]
+        lowest: [false]
+        include:
+          # Every dependency at the lowest version pyproject.toml allows, on the oldest Python
+          - os: ubuntu-latest
+            python: "3.10"
+            lowest: true
+          - os: windows-latest
+            python: "3.10"
+            lowest: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.23"
+          python-version: ${{ matrix.python }}
+          activate-environment: true
+          venv-path: ${{ runner.temp }}/venv
+          no-project: true
+          enable-cache: false
+
+      - name: Download the release files
+        if: ${{ inputs.dist-artifact }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.dist-artifact }}
+          path: dist
+
+      # Build with the release workflow's Python: the hashed build constraints are resolved for it, and
+      # the files then match what a release would publish. Only the test environment uses matrix.python.
+      - name: Build
+        if: ${{ !inputs.dist-artifact }}
+        run: uv build --python 3.12 --build-constraints .github/build-constraints.txt --require-hashes
+
+      - name: Install the wheel at the lowest allowed dependency versions
+        if: ${{ matrix.lowest }}
+        run: |
+          wheel=$(ls dist/*.whl)
+          python .github/scripts/floors.py requirements "$wheel" > "$RUNNER_TEMP/floors.txt"
+          uv pip install --resolution lowest-direct "$wheel" -r "$RUNNER_TEMP/floors.txt"
+          # The test tools must not move a dependency off its floor: pin everything installed so far.
+          uv pip freeze | grep -v ' @ file:' > "$RUNNER_TEMP/pinned.txt"
+          uv pip install -c "$RUNNER_TEMP/pinned.txt" "$wheel[dev]"
+          python .github/scripts/floors.py report "$wheel"
+
+      - name: Install the wheel
+        if: ${{ !matrix.lowest }}
+        run: uv pip install "$(ls dist/*.whl)[dev]"
+
+      - name: Run the tests against the installed wheel
+        run: |
+          python -c "import kroger_mcp, sys; print(kroger_mcp.__file__); sys.exit(0 if 'site-packages' in kroger_mcp.__file__ else 'kroger_mcp was not imported from the installed wheel')"
+          python -m pytest -p no:cacheprovider -q -ra

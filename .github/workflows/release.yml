@@ -1,0 +1,90 @@
+name: Release
+
+# Publishes to PyPI through trusted publishing when a v* tag is pushed. No API token is stored anywhere.
+#
+# The gates that keep publishing to the repository owner live outside this file, because anyone with write
+# access can edit it (see RELEASING.md): the `pypi` environment allows only v* tags and needs the
+# owner's approval, a tag ruleset lets only the owner create v* tags, and the PyPI trusted publisher accepts
+# only this workflow file running in the `pypi` environment.
+#
+# The build job has no token permission and restores no cache, and only the publish job can request an
+# OIDC token, so nothing that runs during the build can publish.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build the sdist and wheel
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.23"
+          python-version: "3.12"
+          enable-cache: false
+
+      - name: Build
+        run: uv build --python 3.12 --build-constraints .github/build-constraints.txt --require-hashes
+
+      - name: Check that the tag matches the package version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          shopt -s nullglob
+          wheels=(dist/*.whl) sdists=(dist/*.tar.gz)
+          if [ ${#wheels[@]} -ne 1 ] || [ ${#sdists[@]} -ne 1 ]; then
+            echo "::error::expected one wheel and one sdist, found ${#wheels[@]} and ${#sdists[@]}"; exit 1
+          fi
+          version=$(basename "${wheels[0]}" | cut -d- -f2)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match the package version $version"; exit 1
+          fi
+          echo "Building $version from tag $TAG"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  test:
+    name: Test the release files
+    needs: build
+    permissions:
+      contents: read
+    uses: $/.github/workflows/tests.yml
+    with:
+      dist-artifact: dist
+
+  publish:
+    name: Publish to PyPI
+    needs: [build, test]
+    if: github.repository == 'CupOfOwls/kroger-mcp'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/kroger-mcp/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+
+      # Uploads with an OIDC token and publishes signed PEP 740 attestations by default.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
