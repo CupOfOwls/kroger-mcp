@@ -168,12 +168,15 @@ def resolve_data_file(filename: str) -> str:
     the CWD is migrated once.
     """
     path = get_token_file_path(filename)
-    if not os.path.exists(path) and os.path.exists(filename):
-        try:
-            with open(filename, 'r') as src, open(path, 'w') as dst:
-                dst.write(src.read())
-        except Exception as e:
-            print(f"Warning: Could not migrate {filename} from CWD: {e}", file=sys.stderr)
+    # Migration must use the state file's lock too: another caller could
+    # otherwise read a partial copy or overwrite an update with legacy data.
+    with file_lock(path):
+        if not os.path.exists(path) and os.path.exists(filename):
+            try:
+                with open(filename, 'r') as src, open(path, 'w') as dst:
+                    dst.write(src.read())
+            except Exception as e:
+                print(f"Warning: Could not migrate {filename} from CWD: {e}", file=sys.stderr)
     return path
 
 
